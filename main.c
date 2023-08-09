@@ -212,7 +212,10 @@ void editorRefreshScreen()
 
   // move cursor to cursor position
   char buf[32];
-  snprintf(buf, sizeof(buf), "\x1b[%d;%dH", EDITOR.cursory+1, EDITOR.cursorx+1);
+  if (EDITOR.mode == MODE_COMMAND)
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", EDITOR.screencols, 1);
+  else
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", EDITOR.cursory+1, EDITOR.cursorx+1);
   abAppend(&ab, buf, strlen(buf));
 
   // show cursor (unset mode ?25 which is hidden)
@@ -272,7 +275,6 @@ void editorHandleNormalMode(char keyChar) {
       break;
     case ':':
       EDITOR.mode = MODE_COMMAND;
-      EDITOR.cursory = EDITOR.screenrows;
       // disableRawMode();
     break;
     case 'g':
