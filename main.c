@@ -9,6 +9,12 @@
 #include <string.h>
 #include <sys/ioctl.h>
 // }}}
+// Assets {{{
+int charToDigit(char ch) 
+{
+  return ch - '0';
+}
+// }}}
 // Defines {{{
 #define CTRL_KEY(k) ((k) & 0x1f)
 #define NIM_VERSION "0.0.1"
@@ -17,12 +23,15 @@ enum EditorKey {
   RIGHT = 'l',
   UP = 'k',
   DOWN = 'j',
+  BOTTOM = 'G',
+  ESC = 27,
   TOP = 1000,
 };
 enum Mode {
   MODE_NORMAL,
   MODE_INSERT,
   MODE_REPLACE,
+  MODE_COMMAND,
 };
 // Append buffer {{{
 struct appendBuffer {
@@ -53,11 +62,19 @@ void abReinit(struct appendBuffer *ab)
   ab->buffer = NULL;
   ab->length = 0;
 }
+void abEmpty(struct appendBuffer *ab)
+{
+  ab->buffer = "";
+  ab->length = 0;
+}
 // }}}
 // }}}
 // Data {{{
 struct editorConfig {
   struct appendBuffer sequence;
+  struct appendBuffer numberSequence;
+  long int numberSequenceInt;
+  enum Mode mode;
   int cursorx, cursory;
   int screenrows, screencols;
   struct termios orig_termios;
@@ -99,6 +116,7 @@ char editorReadKey() {
   while ((nread = read(STDIN_FILENO, &c, 1)) != 1) {
     if (nread == -1 && errno != EAGAIN) die("read");
   }
+  printf("%c\r\n", c);
   return c;
 }
 
@@ -215,40 +233,78 @@ void editorMoveCursor (int key)
         EDITOR.cursorx++;
       break;
     case DOWN:
-      EDITOR.cursory++;
+      if (EDITOR.cursory != EDITOR.screenrows - 1)
+        EDITOR.cursory++;
       break;
     case UP:
-      EDITOR.cursory--;
+      if (EDITOR.cursory != 0)
+        EDITOR.cursory--;
       break;
-
+    case BOTTOM:
+      EDITOR.cursory = EDITOR.screenrows - 1;
+      break;
     case TOP:
       EDITOR.cursory = 0;
       break;
   }
 }
-void editorProcessKeypress(char keyChar) {
-  if (EDITOR.sequence.length) {
-    if (strcmp(EDITOR.sequence.buffer, "gg")) {
-      editorMoveCursor(TOP);
-      abReinit(&EDITOR.sequence);
-    }
+
+void editorHandleNormalMode(char keyChar) {
+  if (isdigit(keyChar)) {
+    abAppend(&EDITOR.numberSequence, &keyChar, 1);
+    return;
   }
+
+  if (EDITOR.numberSequence.length) {
+
+    char *output;
+    EDITOR.numberSequenceInt= strtol(EDITOR.numberSequence.buffer, &output, 10);
+    abReinit(&EDITOR.numberSequence);
+  }
+
   switch (keyChar) {
     case CTRL_KEY('q'):
       write(STDOUT_FILENO, "\x1b[2J", 4);
       write(STDOUT_FILENO, "\x1b[H", 3);
       exit(EXIT_SUCCESS);
       break;
+    case ':':
+      EDITOR.mode = MODE_COMMAND;
+      EDITOR.cursory = EDITOR.screenrows;
+      // disableRawMode();
+    break;
     case 'g':
-      abAppend(&EDITOR.sequence, "g" ,1);
+      abAppend(&EDITOR.sequence, &keyChar ,1);
       break;
     case RIGHT:
     case LEFT:
     case DOWN:
     case UP:
-      editorMoveCursor(keyChar);
+      do 
+        editorMoveCursor(keyChar);
+      while (--EDITOR.numberSequenceInt > 0);
+      break;
+    case BOTTOM:
+      if (EDITOR.numberSequenceInt) {
+        EDITOR.cursory = EDITOR.numberSequenceInt;
+        EDITOR.numberSequenceInt=0;
+      }
+      else
+        editorMoveCursor(keyChar);
       break;
   }
+  if (EDITOR.sequence.length > 1) {
+    if (strstr(EDITOR.sequence.buffer, "gg") != NULL) {
+      if (EDITOR.numberSequenceInt) {
+          EDITOR.cursory = EDITOR.numberSequenceInt;
+          EDITOR.numberSequenceInt=0;
+        }
+      else
+        editorMoveCursor(TOP);
+    }
+    abReinit(&EDITOR.sequence);
+  }
+
 }
 // }}}
 // Init {{{
@@ -256,7 +312,11 @@ void initEditor()
 {
   EDITOR.cursorx = 0;
   EDITOR.cursory = 0;
+  EDITOR.numberSequenceInt = 0;
+  EDITOR.mode = MODE_NORMAL;
+
   abReinit(&EDITOR.sequence);
+  abReinit(&EDITOR.numberSequence);
 
   if (getWindowSize(&EDITOR.screenrows, &EDITOR.screencols) == EXIT_FAILURE)
     die("getWindowSize");
@@ -268,9 +328,18 @@ int main()
   
   while (1) {
     editorRefreshScreen();
-    editorProcessKeypress(editorReadKey());
-  }
+    char ch = editorReadKey();
+    if (ch == ESC) {
+      abReinit(&EDITOR.sequence);
+      EDITOR.mode = MODE_NORMAL;
+    }
+    else {
+      if (EDITOR.mode == MODE_NORMAL)
+        editorHandleNormalMode(ch);
+    }
+  } 
   abFree(&EDITOR.sequence);
+  abFree(&EDITOR.numberSequence);
   return EXIT_SUCCESS;
 }
 // }}}
