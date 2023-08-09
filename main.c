@@ -19,14 +19,16 @@ int charToDigit(char ch)
 #define CTRL_KEY(k) ((k) & 0x1f)
 #define NIM_VERSION "0.0.1"
 enum EditorKey {
-  LEFT = 'h',
-  RIGHT = 'l',
-  UP = 'k',
-  DOWN = 'j',
+  KEY_LEFT = 'h',
+  KEY_RIGHT = 'l',
+  KEY_UP = 'k',
+  KEY_DOWN = 'j',
   BOTTOM = 'G',
   ESC = 27,
   TOP = 1000,
 };
+#define CASE_DOWN case KEY_DOWN: case '+'
+#define CASE_UP case KEY_UP: case '-'
 enum Mode {
   MODE_NORMAL,
   MODE_INSERT,
@@ -224,19 +226,19 @@ void editorRefreshScreen()
 void editorMoveCursor (int key) 
 {
   switch (key) {
-    case LEFT:
+    case KEY_LEFT:
       if (EDITOR.cursorx != 0)
         EDITOR.cursorx--;
       break;
-    case RIGHT:
+    case KEY_RIGHT:
       if (EDITOR.cursorx != EDITOR.screencols - 1)
         EDITOR.cursorx++;
       break;
-    case DOWN:
+    CASE_DOWN:
       if (EDITOR.cursory != EDITOR.screenrows - 1)
         EDITOR.cursory++;
       break;
-    case UP:
+    CASE_UP:
       if (EDITOR.cursory != 0)
         EDITOR.cursory--;
       break;
@@ -276,10 +278,10 @@ void editorHandleNormalMode(char keyChar) {
     case 'g':
       abAppend(&EDITOR.sequence, &keyChar ,1);
       break;
-    case RIGHT:
-    case LEFT:
-    case DOWN:
-    case UP:
+    case KEY_RIGHT:
+    case KEY_LEFT:
+    CASE_DOWN:
+    CASE_UP:
       do 
         editorMoveCursor(keyChar);
       while (--EDITOR.numberSequenceInt > 0);
