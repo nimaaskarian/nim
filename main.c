@@ -1,5 +1,8 @@
 // vim:foldmethod=marker
 // Includes {{{
+#define _DEFAULT_SOURCE
+#define _BSD_SOURCE
+#define _GNU_SOURCE
 #include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
@@ -8,6 +11,7 @@
 #include <termios.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/types.h>
 // }}}
 // Assets {{{
 int charToDigit(char ch) 
@@ -72,13 +76,20 @@ void abEmpty(struct appendBuffer *ab)
 // }}}
 // }}}
 // Data {{{
+typedef struct erow {
+  int size;
+  char *buffer;
+} erow;
 struct editorConfig {
   struct appendBuffer sequence;
   struct appendBuffer numberSequence;
   long int numberSequenceInt;
   enum Mode mode;
   int cursorx, cursory;
+  int rowoffset;
   int screenrows, screencols;
+  int numrows;
+  erow* row;
   struct termios orig_termios;
 };
 struct editorConfig EDITOR;
@@ -163,28 +174,81 @@ int getWindowSize(int *rows, int *cols)
   }
 }
 // }}}
+// Row operations {{{
+void editorAppendRow(char *s, size_t len)
+{
+  EDITOR.row = realloc(EDITOR.row, sizeof(erow) * (EDITOR.numrows+1));
+
+  int at = EDITOR.numrows;
+  EDITOR.row[at].size = len;
+  EDITOR.row[at].buffer = malloc(len+1);
+  memcpy(EDITOR.row[at].buffer, s, len);
+  EDITOR.row[at].buffer[len] = '\0';
+  EDITOR.numrows++;
+}
+// }}}
+// File i/o {{{
+void editorOpen(char *filename) 
+{
+  FILE *fptr = fopen(filename, "r");
+  if (!fptr) die("fopen");
+
+  char *line = NULL;
+  size_t linecap = 0;
+  ssize_t linelen;
+
+  while ((linelen = getline(&line, &linecap, fptr)) != -1)
+    if (linelen != -1) {
+      while (linelen > 0 && (line[linelen - 1] == '\n' ||
+                             line[linelen - 1] == '\r'))
+        linelen--;
+
+      editorAppendRow(line, linelen);
+    }
+
+  free(line);
+  fclose(fptr);
+  
+}
+// }}}
 // Output {{{
+void editorScroll()
+{
+  if (EDITOR.cursory < EDITOR.rowoffset)
+    EDITOR.rowoffset = EDITOR.cursory;
+   
+  if (EDITOR.cursory >= EDITOR.rowoffset + EDITOR.screenrows)
+    EDITOR.rowoffset = EDITOR.cursory - EDITOR.screenrows + 1;
+}
 void editorDrawRows(struct appendBuffer *ab)
 {
   for (int y = 0; y < EDITOR.screenrows; y++) {
-    if (y == EDITOR.screenrows/3) {
-      char welcome[80];
-      int welcomelen = snprintf(welcome, sizeof(welcome), "Nim editor -- version %s", NIM_VERSION);
-      if (welcomelen > EDITOR.screencols)
-        welcomelen = EDITOR.screencols;
+    int filerow = y+EDITOR.rowoffset;
+    if (filerow >= EDITOR.numrows) {
+      if (EDITOR.numrows == 0 && y == EDITOR.screenrows/3) {
+        char welcome[80];
+        int welcomelen = snprintf(welcome, sizeof(welcome), "Nim editor -- version %s", NIM_VERSION);
+        if (welcomelen > EDITOR.screencols)
+          welcomelen = EDITOR.screencols;
 
-      int padding = (EDITOR.screencols - welcomelen) / 2;
-      if (padding) {
+        int padding = (EDITOR.screencols - welcomelen) / 2;
+        if (padding) {
+          abAppend(ab, "~", 1);
+          padding--;
+        }
+        while (padding--)
+          abAppend(ab, " ", 1);
+
+        abAppend(ab,welcome, welcomelen);
+
+      } else 
         abAppend(ab, "~", 1);
-        padding--;
-      }
-      while (padding--)
-        abAppend(ab, " ", 1);
-       
-      abAppend(ab,welcome, welcomelen);
-
-    } else
-      abAppend(ab, "~", 1);
+    } else {
+      int len = EDITOR.row[filerow].size;
+      if (len > EDITOR.screencols) 
+        len = EDITOR.screencols;
+      abAppend(ab, EDITOR.row[filerow].buffer, len);
+    }
 
     // erase in line
     abAppend(ab, "\x1b[K", 3);
@@ -195,6 +259,7 @@ void editorDrawRows(struct appendBuffer *ab)
 }
 void editorRefreshScreen() 
 {
+  editorScroll();
   struct appendBuffer ab = ABUF_INIT;
 
   // hide cursor (set mode ?25 which is hidden)
@@ -215,7 +280,7 @@ void editorRefreshScreen()
   if (EDITOR.mode == MODE_COMMAND)
     snprintf(buf, sizeof(buf), "\x1b[%d;%dH", EDITOR.screencols, 1);
   else
-    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", EDITOR.cursory+1, EDITOR.cursorx+1);
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", EDITOR.cursory-EDITOR.rowoffset+1, EDITOR.cursorx+1);
   abAppend(&ab, buf, strlen(buf));
 
   // show cursor (unset mode ?25 which is hidden)
@@ -238,7 +303,7 @@ void editorMoveCursor (int key)
         EDITOR.cursorx++;
       break;
     CASE_DOWN:
-      if (EDITOR.cursory != EDITOR.screenrows - 1)
+      if (EDITOR.cursory < EDITOR.numrows)
         EDITOR.cursory++;
       break;
     CASE_UP:
@@ -250,6 +315,7 @@ void editorMoveCursor (int key)
       break;
     case TOP:
       EDITOR.cursory = 0;
+      EDITOR.rowoffset = EDITOR.cursory - EDITOR.screenrows + 1;
       break;
   }
 }
@@ -316,8 +382,11 @@ void initEditor()
 {
   EDITOR.cursorx = 0;
   EDITOR.cursory = 0;
+  EDITOR.numrows = 0;
+  EDITOR.rowoffset = 0;
   EDITOR.numberSequenceInt = 0;
   EDITOR.mode = MODE_NORMAL;
+  EDITOR.row = NULL;
 
   abReinit(&EDITOR.sequence);
   abReinit(&EDITOR.numberSequence);
@@ -325,10 +394,12 @@ void initEditor()
   if (getWindowSize(&EDITOR.screenrows, &EDITOR.screencols) == EXIT_FAILURE)
     die("getWindowSize");
 }
-int main()
+int main(int argc, char *argv[])
 { 
   enableRawMode();
   initEditor();
+  if (argc >= 2)
+    editorOpen(argv[1]);
   
   while (1) {
     editorRefreshScreen();
