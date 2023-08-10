@@ -418,7 +418,7 @@ void editorMoveCursor (int key)
         EDITOR.cursory--;
       break;
     case BOTTOM:
-      EDITOR.cursory = EDITOR.rowscount - 1;
+      EDITOR.cursory = EDITOR.rowscount;
       break;
     case TOP:
       EDITOR.cursory = 0;
@@ -522,13 +522,6 @@ void editorHandleNormalMode(char keyChar) {
     }
     abReinit(&EDITOR.sequence);
   }
-
-  FILE *fptr;
-  fptr =  fopen("log.txt", "a");
-  fprintf(fptr, "cursorx: %d, cursory: %d, offset: %d, key: %c (%d), num-sequence: %d\n",EDITOR.cursorx, EDITOR.cursory, EDITOR.rowoffset, keyChar,keyChar, EDITOR.numberSequenceInt);
-  fclose(fptr);
-
-
 }
 // }}}
 // Init {{{
