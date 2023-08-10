@@ -21,7 +21,7 @@ make
 make install
 ```
 ## Uninstall
-For uninstallation, set `$DESTDIR` and `$PREFIX` variables like you've set them when you where installing. Then:  
+For uninstallation, set `$DESTDIR` and `$PREFIX` variables like you've set them when you were installing. Then:  
 ```
 make uninstall
 ```
