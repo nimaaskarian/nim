@@ -32,6 +32,7 @@ size_t firstNonSpace (const char* s)
 // Defines {{{
 #define CTRL_KEY(k) ((k) & 0x1f)
 #define NIM_VERSION "0.0.1"
+#define TAB_WIDTH 4
 enum EditorKey {
   KEY_LEFT = 'h',
   KEY_RIGHT = 'l',
@@ -90,15 +91,17 @@ void abEmpty(struct appendBuffer *ab)
 // }}}
 // Data {{{
 typedef struct erow {
-  int size;
-  char *buffer;
+  int size, rendersize;
+  char *buffer, *renderbuffer;
 } erow;
 struct editorConfig {
   struct appendBuffer sequence;
   struct appendBuffer numberSequence;
-  long int numberSequenceInt;
+  int numberSequenceInt;
   enum Mode mode;
   int cursorx, cursory;
+  int renderx;
+  int isEndMode;
   int rowoffset, coloffset;
   int screenrows, screencols;
   unsigned int rowscount;
@@ -188,6 +191,41 @@ int getWindowSize(int *rows, int *cols)
 }
 // }}}
 // Row operations {{{
+int editorRowCursorxToRenderx(erow *row, int cursorx)
+{
+  int renderx = 0;
+  for (int i = 0; i < cursorx; ++i) {
+    if(row->buffer[i] == '\t')
+      renderx += (TAB_WIDTH - 1) - (renderx % TAB_WIDTH);
+    renderx++;
+  }
+
+  return renderx;
+}
+void editorUpdateRow(erow *row) 
+{
+  int tabs = 0;
+  for (int i = 0; i < row->size; i++)
+    if(row->buffer[i] == '\t')
+      tabs++;
+
+  free(row->renderbuffer);
+  row->renderbuffer = malloc(row->size+1  + tabs*(TAB_WIDTH-1));
+
+  int index = 0;
+  for (int i = 0; i < row->size; ++i)
+  {
+    if (row->buffer[i] == '\t') {
+      row->renderbuffer[index++] = ' ';
+      while (index % TAB_WIDTH != 0)
+        row->renderbuffer[index++] = ' ';
+    } else
+      row->renderbuffer[index++] = row->buffer[i];
+  }
+
+  row->renderbuffer[index] = '\0';
+  row->rendersize = index;
+}
 void editorAppendRow(char *s, size_t len)
 {
   EDITOR.rows = realloc(EDITOR.rows, sizeof(erow) * (EDITOR.rowscount+1));
@@ -196,7 +234,13 @@ void editorAppendRow(char *s, size_t len)
   EDITOR.rows[at].size = len;
   EDITOR.rows[at].buffer = malloc(len+1);
   memcpy(EDITOR.rows[at].buffer, s, len);
+
   EDITOR.rows[at].buffer[len] = '\0';
+
+  EDITOR.rows[at].rendersize = 0;
+  EDITOR.rows[at].renderbuffer = NULL;
+  editorUpdateRow(&EDITOR.rows[at]);
+
   EDITOR.rowscount++;
 }
 // }}}
@@ -227,6 +271,10 @@ void editorOpen(char *filename)
 // Output {{{
 void editorScroll()
 {
+  EDITOR.renderx = 0;
+  if (EDITOR.cursory < EDITOR.rowscount)
+    EDITOR.renderx = editorRowCursorxToRenderx(&EDITOR.rows[EDITOR.cursory], EDITOR.cursorx);
+
   if (EDITOR.cursory < EDITOR.rowoffset)
     EDITOR.rowoffset = EDITOR.cursory;
   if (EDITOR.cursory >= EDITOR.rowoffset + EDITOR.screenrows)
@@ -236,6 +284,11 @@ void editorScroll()
     EDITOR.coloffset = EDITOR.cursorx;
   if (EDITOR.cursorx >= EDITOR.coloffset + EDITOR.screencols)
     EDITOR.coloffset = EDITOR.cursorx - EDITOR.screencols + 1;
+
+  if (EDITOR.renderx < EDITOR.coloffset)
+    EDITOR.coloffset = EDITOR.renderx;
+  if (EDITOR.renderx >= EDITOR.coloffset + EDITOR.screencols)
+    EDITOR.coloffset = EDITOR.renderx - EDITOR.screencols + 1;
 }
 
 void editorDrawRows(struct appendBuffer *ab)
@@ -262,10 +315,10 @@ void editorDrawRows(struct appendBuffer *ab)
       } else 
         abAppend(ab, "~", 1);
     } else {
-      int len = EDITOR.rows[filerow].size - EDITOR.coloffset;
+      int len = EDITOR.rows[filerow].rendersize - EDITOR.coloffset;
       if (len < 0) 
         len = 0;
-      abAppend(ab, &EDITOR.rows[filerow].buffer[EDITOR.coloffset], len);
+      abAppend(ab, &EDITOR.rows[filerow].renderbuffer[EDITOR.coloffset], len);
     }
 
     // erase in line
@@ -299,7 +352,7 @@ void editorRefreshScreen()
     snprintf(buf, sizeof(buf), "\x1b[%d;%dH", EDITOR.screencols, 1);
   else
     snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (EDITOR.cursory-EDITOR.rowoffset)+1,
-                                              (EDITOR.cursorx-EDITOR.coloffset)+1);
+                                              (EDITOR.renderx-EDITOR.coloffset)+1);
   abAppend(&ab, buf, strlen(buf));
 
   // show cursor (unset mode ?25 which is hidden)
@@ -310,30 +363,36 @@ void editorRefreshScreen()
 }
 // }}}
 // Input {{{
-void editorMoveCursorToLine(long int *linenumber)
+void editorMoveCursor (int key);
+void editorMoveCursorToLine(int *linenumber)
 {
-
   if (*linenumber > EDITOR.rowscount)
     *linenumber=EDITOR.rowscount;
 
   if (*linenumber < 0)
-    *linenumber = -*linenumber;
+    *linenumber = -(*linenumber);
 
   EDITOR.cursory = *linenumber;
   EDITOR.rowoffset = 0;
   *linenumber=0;
+  // move cursor with zero key so it gets aligned
+  editorMoveCursor(0);
 }
 
 struct erow* getCurrentRow()
 {
-  return (EDITOR.cursory >= EDITOR.rowscount) ? NULL : &EDITOR.rows[EDITOR.cursory];
+  if (EDITOR.cursory >= EDITOR.rowscount)
+    return NULL;
+  
+  return &EDITOR.rows[EDITOR.cursory];
 }
-void editorMoveCursor (int key) 
+void editorMoveCursor (int key)
 {
   erow *currentRow = getCurrentRow();
 
   switch (key) {
     case KEY_RIGHT:
+      EDITOR.isEndMode = 0;
       if (currentRow && EDITOR.cursorx < currentRow->size)
         EDITOR.cursorx++;
       else if(currentRow && EDITOR.cursorx == currentRow->size) {
@@ -346,6 +405,7 @@ void editorMoveCursor (int key)
         EDITOR.cursory++;
       break;
     case KEY_LEFT:
+      EDITOR.isEndMode = 0;
       if (EDITOR.cursorx != 0) {
         EDITOR.cursorx--;
       } else if (EDITOR.cursory > 0) {
@@ -359,27 +419,31 @@ void editorMoveCursor (int key)
       break;
     case BOTTOM:
       EDITOR.cursory = EDITOR.rowscount - 1;
-      EDITOR.rowoffset = 0;
       break;
     case TOP:
       EDITOR.cursory = 0;
-      EDITOR.rowoffset = 0;
       break;
     case KEY_LINE_FIRST:
+      EDITOR.isEndMode = 0;
       EDITOR.cursorx = 0;
       break;
     case KEY_LINE_START:
-      EDITOR.cursorx = firstNonSpace(currentRow->buffer);
+      EDITOR.isEndMode = 0;
+      EDITOR.cursorx = firstNonSpace(currentRow->renderbuffer);
       break;
     case KEY_LINE_END:
       EDITOR.cursorx = currentRow->size;
+      EDITOR.isEndMode = 1;
     break;
   }
   currentRow = getCurrentRow();
 
   int currentRowLength = currentRow ? currentRow->size : 0;
-  if (EDITOR.cursorx > currentRowLength)
+  if (EDITOR.cursorx > currentRowLength || EDITOR.isEndMode)
     EDITOR.cursorx = currentRowLength;
+
+  while (EDITOR.cursory + EDITOR.rowoffset > EDITOR.rowscount && EDITOR.rowoffset > 0)
+    EDITOR.rowoffset--;
 }
 
 void editorHandleNormalMode(char keyChar) {
@@ -388,14 +452,13 @@ void editorHandleNormalMode(char keyChar) {
       abAppend(&EDITOR.numberSequence, &keyChar, 1);
       return;
     }
+  } else {
+    if (EDITOR.numberSequence.length) {
+      EDITOR.numberSequenceInt= atoi(EDITOR.numberSequence.buffer);
+      abReinit(&EDITOR.numberSequence);
+    }
   }
 
-  if (EDITOR.numberSequence.length) {
-
-    char *output;
-    EDITOR.numberSequenceInt= strtol(EDITOR.numberSequence.buffer, &output, 10);
-    abReinit(&EDITOR.numberSequence);
-  }
 
   switch (keyChar) {
     case CTRL_KEY('q'):
@@ -417,9 +480,14 @@ void editorHandleNormalMode(char keyChar) {
     case KEY_LINE_END:
     CASE_DOWN:
     CASE_UP:
-      do 
+      if (EDITOR.numberSequenceInt <= 0)
         editorMoveCursor(keyChar);
-      while (--EDITOR.numberSequenceInt > 0);
+      else {
+        while (EDITOR.numberSequenceInt > 0) {
+          editorMoveCursor(keyChar);
+          EDITOR.numberSequenceInt--;
+        }
+      }
       break;
     case BOTTOM:
       if (EDITOR.numberSequenceInt) 
@@ -439,6 +507,12 @@ void editorHandleNormalMode(char keyChar) {
     abReinit(&EDITOR.sequence);
   }
 
+  FILE *fptr;
+  fptr =  fopen("log.txt", "a");
+  fprintf(fptr, "cursorx: %d, cursory: %d, offset: %d, key: %c (%d), num-sequence: %d\n",EDITOR.cursorx, EDITOR.cursory, EDITOR.rowoffset, keyChar,keyChar, EDITOR.numberSequenceInt);
+  fclose(fptr);
+
+
 }
 // }}}
 // Init {{{
@@ -452,6 +526,7 @@ void initEditor()
   EDITOR.numberSequenceInt = 0;
   EDITOR.mode = MODE_NORMAL;
   EDITOR.rows = NULL;
+  EDITOR.isEndMode = 0;
 
   abReinit(&EDITOR.sequence);
   abReinit(&EDITOR.numberSequence);

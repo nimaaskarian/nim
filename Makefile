@@ -3,7 +3,7 @@ all: nim
 options:
 	@echo nim install options:
 	@echo "DESTDIR  = $(DESTDIR)"
-	@echo "PREFIX		= $(PREFIX)"
+	@echo "PREFIX   = $(PREFIX)"
 
 nim: main.c
 	$(CC) main.c -o nim -Wall -Wextra -pedantic -std=c99
