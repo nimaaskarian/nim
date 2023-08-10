@@ -344,7 +344,7 @@ void editorMoveCursor (int key)
       break;
     case BOTTOM:
       EDITOR.cursory = EDITOR.numrows - 1;
-      // editorScroll();
+      EDITOR.rowoffset = 0;
       break;
     case TOP:
       EDITOR.cursory = 0;
@@ -363,8 +363,9 @@ void editorMoveCursor (int key)
 }
 
 void editorHandleNormalMode(char keyChar) {
-  if (isdigit(keyChar) && ( keyChar == '0' != EDITOR.numberSequence.length == 0 )) {
-    abAppend(&EDITOR.numberSequence, &keyChar, 1);
+  if (isdigit(keyChar)) {
+    if (keyChar != '0' || EDITOR.numberSequence.length > 0)
+      abAppend(&EDITOR.numberSequence, &keyChar, 1);
     return;
   }
 
