@@ -101,8 +101,8 @@ struct editorConfig {
   int cursorx, cursory;
   int rowoffset, coloffset;
   int screenrows, screencols;
-  unsigned int numrows;
-  erow* row;
+  unsigned int rowscount;
+  erow* rows;
   struct termios orig_termios;
 };
 struct editorConfig EDITOR;
@@ -190,14 +190,14 @@ int getWindowSize(int *rows, int *cols)
 // Row operations {{{
 void editorAppendRow(char *s, size_t len)
 {
-  EDITOR.row = realloc(EDITOR.row, sizeof(erow) * (EDITOR.numrows+1));
+  EDITOR.rows = realloc(EDITOR.rows, sizeof(erow) * (EDITOR.rowscount+1));
 
-  int at = EDITOR.numrows;
-  EDITOR.row[at].size = len;
-  EDITOR.row[at].buffer = malloc(len+1);
-  memcpy(EDITOR.row[at].buffer, s, len);
-  EDITOR.row[at].buffer[len] = '\0';
-  EDITOR.numrows++;
+  int at = EDITOR.rowscount;
+  EDITOR.rows[at].size = len;
+  EDITOR.rows[at].buffer = malloc(len+1);
+  memcpy(EDITOR.rows[at].buffer, s, len);
+  EDITOR.rows[at].buffer[len] = '\0';
+  EDITOR.rowscount++;
 }
 // }}}
 // File i/o {{{
@@ -242,8 +242,8 @@ void editorDrawRows(struct appendBuffer *ab)
 {
   for (int y = 0; y < EDITOR.screenrows; y++) {
     int filerow = y+EDITOR.rowoffset;
-    if (filerow >= EDITOR.numrows) {
-      if (EDITOR.numrows == 0 && y == EDITOR.screenrows/3) {
+    if (filerow >= EDITOR.rowscount) {
+      if (EDITOR.rowscount == 0 && y == EDITOR.screenrows/3) {
         char welcome[80];
         int welcomelen = snprintf(welcome, sizeof(welcome), "Nim editor -- version %s", NIM_VERSION);
         if (welcomelen > EDITOR.screencols)
@@ -262,10 +262,10 @@ void editorDrawRows(struct appendBuffer *ab)
       } else 
         abAppend(ab, "~", 1);
     } else {
-      int len = EDITOR.row[filerow].size - EDITOR.coloffset;
+      int len = EDITOR.rows[filerow].size - EDITOR.coloffset;
       if (len < 0) 
         len = 0;
-      abAppend(ab, &EDITOR.row[filerow].buffer[EDITOR.coloffset], len);
+      abAppend(ab, &EDITOR.rows[filerow].buffer[EDITOR.coloffset], len);
     }
 
     // erase in line
@@ -313,8 +313,8 @@ void editorRefreshScreen()
 void editorMoveCursorToLine(long int *linenumber)
 {
 
-  if (*linenumber > EDITOR.numrows)
-    *linenumber=EDITOR.numrows;
+  if (*linenumber > EDITOR.rowscount)
+    *linenumber=EDITOR.rowscount;
 
   if (*linenumber < 0)
     *linenumber = -*linenumber;
@@ -326,31 +326,39 @@ void editorMoveCursorToLine(long int *linenumber)
 
 struct erow* getCurrentRow()
 {
-  return (EDITOR.cursory >= EDITOR.numrows) ? NULL : &EDITOR.row[EDITOR.cursory];
+  return (EDITOR.cursory >= EDITOR.rowscount) ? NULL : &EDITOR.rows[EDITOR.cursory];
 }
 void editorMoveCursor (int key) 
 {
   erow *currentRow = getCurrentRow();
 
   switch (key) {
-    case KEY_LEFT:
-      if (EDITOR.cursorx != 0)
-        EDITOR.cursorx--;
-      break;
     case KEY_RIGHT:
       if (currentRow && EDITOR.cursorx < currentRow->size)
         EDITOR.cursorx++;
+      else if(currentRow && EDITOR.cursorx == currentRow->size) {
+        EDITOR.cursory++;
+        EDITOR.cursorx=0;
+      }
       break;
     CASE_DOWN:
-      if (EDITOR.cursory < EDITOR.numrows)
+      if (EDITOR.cursory < EDITOR.rowscount)
         EDITOR.cursory++;
+      break;
+    case KEY_LEFT:
+      if (EDITOR.cursorx != 0) {
+        EDITOR.cursorx--;
+      } else if (EDITOR.cursory > 0) {
+        EDITOR.cursory--;
+        EDITOR.cursorx = getCurrentRow()->size;
+      }
       break;
     CASE_UP:
       if (EDITOR.cursory > 0)
         EDITOR.cursory--;
       break;
     case BOTTOM:
-      EDITOR.cursory = EDITOR.numrows - 1;
+      EDITOR.cursory = EDITOR.rowscount - 1;
       EDITOR.rowoffset = 0;
       break;
     case TOP:
@@ -438,12 +446,12 @@ void initEditor()
 {
   EDITOR.cursorx = 0;
   EDITOR.cursory = 0;
-  EDITOR.numrows = 0;
+  EDITOR.rowscount = 0;
   EDITOR.rowoffset = 0;
   EDITOR.coloffset = 0;
   EDITOR.numberSequenceInt = 0;
   EDITOR.mode = MODE_NORMAL;
-  EDITOR.row = NULL;
+  EDITOR.rows = NULL;
 
   abReinit(&EDITOR.sequence);
   abReinit(&EDITOR.numberSequence);
@@ -472,7 +480,7 @@ int main(int argc, char *argv[])
   } 
   abFree(&EDITOR.sequence);
   abFree(&EDITOR.numberSequence);
-  free(EDITOR.row);
+  free(EDITOR.rows);
   return EXIT_SUCCESS;
 }
 // }}}
