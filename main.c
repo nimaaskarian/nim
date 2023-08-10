@@ -17,6 +17,16 @@
 int charToDigit(char ch) 
 {
   return ch - '0';
+} 
+
+size_t firstNonSpace (const char* s) 
+{
+  size_t i = 0;
+  while(s[i] == ' ' || s[i] == '\t'|| s[i] == '\n' || s[i] == '\r' || s[i] == '\f' || s[i] == '\v')
+  {
+      ++i;
+  }
+  return i;
 }
 // }}}
 // Defines {{{
@@ -27,6 +37,9 @@ enum EditorKey {
   KEY_RIGHT = 'l',
   KEY_UP = 'k',
   KEY_DOWN = 'j',
+  KEY_LINE_START = '^',
+  KEY_LINE_FIRST = '0',
+  KEY_LINE_END = '$',
   BOTTOM = 'G',
   ESC = 27,
   TOP = 1000,
@@ -88,7 +101,7 @@ struct editorConfig {
   int cursorx, cursory;
   int rowoffset;
   int screenrows, screencols;
-  int numrows;
+  unsigned int numrows;
   erow* row;
   struct termios orig_termios;
 };
@@ -214,6 +227,11 @@ void editorOpen(char *filename)
 // Output {{{
 void editorScroll()
 {
+  FILE *fptr;
+  fptr =  fopen("log.txt", "a");
+  fprintf(fptr, "cursorx: %d, cursory: %d, offset: %d\n",EDITOR.cursorx, EDITOR.cursory, EDITOR.rowoffset);
+  fclose(fptr);
+
   if (EDITOR.cursory < EDITOR.rowoffset)
     EDITOR.rowoffset = EDITOR.cursory;
    
@@ -280,7 +298,7 @@ void editorRefreshScreen()
   if (EDITOR.mode == MODE_COMMAND)
     snprintf(buf, sizeof(buf), "\x1b[%d;%dH", EDITOR.screencols, 1);
   else
-    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", EDITOR.cursory-EDITOR.rowoffset+1, EDITOR.cursorx+1);
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (EDITOR.cursory-EDITOR.rowoffset)+1, EDITOR.cursorx+1);
   abAppend(&ab, buf, strlen(buf));
 
   // show cursor (unset mode ?25 which is hidden)
@@ -291,6 +309,20 @@ void editorRefreshScreen()
 }
 // }}}
 // Input {{{
+void editorMoveCursorToLine(long int *linenumber)
+{
+
+  if (*linenumber > EDITOR.numrows)
+    *linenumber=EDITOR.numrows;
+
+  if (*linenumber < 0)
+    *linenumber = -*linenumber;
+
+  EDITOR.cursory = *linenumber;
+  EDITOR.rowoffset = 0;
+  *linenumber=0;
+}
+
 void editorMoveCursor (int key) 
 {
   switch (key) {
@@ -311,17 +343,27 @@ void editorMoveCursor (int key)
         EDITOR.cursory--;
       break;
     case BOTTOM:
-      EDITOR.cursory = EDITOR.screenrows - 1;
+      EDITOR.cursory = EDITOR.numrows - 1;
+      // editorScroll();
       break;
     case TOP:
       EDITOR.cursory = 0;
-      EDITOR.rowoffset = EDITOR.cursory - EDITOR.screenrows + 1;
+      EDITOR.rowoffset = 0;
       break;
+    case KEY_LINE_FIRST:
+      EDITOR.cursorx = 0;
+      break;
+    case KEY_LINE_START:
+      EDITOR.cursorx = firstNonSpace(EDITOR.row[EDITOR.cursory].buffer);
+      break;
+    case KEY_LINE_END:
+      EDITOR.cursorx = EDITOR.row[EDITOR.cursory].size - 1;
+    break;
   }
 }
 
 void editorHandleNormalMode(char keyChar) {
-  if (isdigit(keyChar)) {
+  if (isdigit(keyChar) && ( keyChar == '0' != EDITOR.numberSequence.length == 0 )) {
     abAppend(&EDITOR.numberSequence, &keyChar, 1);
     return;
   }
@@ -348,6 +390,9 @@ void editorHandleNormalMode(char keyChar) {
       break;
     case KEY_RIGHT:
     case KEY_LEFT:
+    case KEY_LINE_START:
+    case KEY_LINE_FIRST:
+    case KEY_LINE_END:
     CASE_DOWN:
     CASE_UP:
       do 
@@ -355,22 +400,19 @@ void editorHandleNormalMode(char keyChar) {
       while (--EDITOR.numberSequenceInt > 0);
       break;
     case BOTTOM:
-      if (EDITOR.numberSequenceInt) {
-        EDITOR.cursory = EDITOR.numberSequenceInt;
-        EDITOR.numberSequenceInt=0;
-      }
+      if (EDITOR.numberSequenceInt) 
+        editorMoveCursorToLine(&EDITOR.numberSequenceInt);
       else
         editorMoveCursor(keyChar);
       break;
   }
   if (EDITOR.sequence.length > 1) {
     if (strstr(EDITOR.sequence.buffer, "gg") != NULL) {
-      if (EDITOR.numberSequenceInt) {
-          EDITOR.cursory = EDITOR.numberSequenceInt;
-          EDITOR.numberSequenceInt=0;
-        }
+      if (EDITOR.numberSequenceInt)
+        editorMoveCursorToLine(&EDITOR.numberSequenceInt);
       else
         editorMoveCursor(TOP);
+      
     }
     abReinit(&EDITOR.sequence);
   }
@@ -415,6 +457,7 @@ int main(int argc, char *argv[])
   } 
   abFree(&EDITOR.sequence);
   abFree(&EDITOR.numberSequence);
+  free(EDITOR.row);
   return EXIT_SUCCESS;
 }
 // }}}
