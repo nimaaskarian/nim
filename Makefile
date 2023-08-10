@@ -1,14 +1,19 @@
+include config.mk
 all: nim
 
-options:
+install-options:
 	@echo nim install options:
 	@echo "DESTDIR  = $(DESTDIR)"
 	@echo "PREFIX   = $(PREFIX)"
 
-nim: main.c
-	$(CC) main.c -o nim -Wall -Wextra -pedantic -std=c99
+options:
+	@echo nim compile options:
+	@echo "CFLAGS    = $(CFLAGS)"
 
-install: nim options
+nim: main.c options
+	$(CC) main.c -o nim $(CFLAGS)
+
+install: nim install-options
 	mkdir -p $(DESTDIR)$(PREFIX)/bin
 	cp -f nim $(DESTDIR)$(PREFIX)/bin
 

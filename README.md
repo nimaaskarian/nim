@@ -8,10 +8,7 @@ This project is untested on windows. Though it should work with mingw64 as the p
 - make
 
 ## Installation
-Installation path is `$(DESTDIR)$(PREFIX)/bin`. You can set these two variable like the example below to install inside `~/.local/bin`.  
-```
-export DESTDIR=~/.local
-```
+Default installation path is set to `/usr/local/bin`. You can change it with changing the `$PREFIX` variable inside the `config.mk` file.
 Clone this git repository and change directory into it:  
 ```
 git clone https://github.com/nimaaskarian/nim
@@ -28,7 +25,6 @@ Then you can:
   ```
 
 ## Uninstall
-For uninstallation, set `$DESTDIR` and `$PREFIX` variables like you've set them when you were installing. Then:  
 ```
 make uninstall
 ```

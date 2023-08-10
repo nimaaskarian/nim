@@ -442,6 +442,14 @@ void editorMoveCursor (int key)
   if (EDITOR.cursorx > currentRowLength || EDITOR.isEndMode)
     EDITOR.cursorx = currentRowLength;
 
+  // first set cursory to 0 if its below 0.
+  // so rowscount comparison be valid
+  if (EDITOR.cursory < 0)
+    EDITOR.cursory = 0;
+
+  if (EDITOR.cursory > EDITOR.rowscount)
+    EDITOR.cursory = EDITOR.rowscount;
+
   while (EDITOR.cursory + EDITOR.rowoffset > EDITOR.rowscount && EDITOR.rowoffset > 0)
     EDITOR.rowoffset--;
 }
@@ -494,6 +502,14 @@ void editorHandleNormalMode(char keyChar) {
         editorMoveCursorToLine(&EDITOR.numberSequenceInt);
       else
         editorMoveCursor(keyChar);
+      break;
+    case CTRL_KEY('f'):
+      EDITOR.cursory+=EDITOR.screenrows;
+      editorMoveCursor(0);
+      break;
+    case CTRL_KEY('b'):
+      EDITOR.cursory-=EDITOR.screenrows;
+      editorMoveCursor(0);
       break;
   }
   if (EDITOR.sequence.length > 1) {
