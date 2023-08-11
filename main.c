@@ -101,6 +101,7 @@ struct editorConfig {
   int numberSequenceInt;
   enum Mode mode;
   int cursorx, cursory;
+  int savedcursorx;
   int renderx;
   int isEndMode;
   int rowoffset, coloffset;
@@ -411,8 +412,13 @@ void editorRefreshScreen()
 }
 // }}}
 // Input {{{
+void editorMoveCursorx(int x)
+{
+  EDITOR.cursorx = x;
+  EDITOR.savedcursorx = x;
+}
 void editorMoveCursor (int key);
-void editorMoveCursorToLine(int *linenumber)
+void editorMoveCursoryToLine(int *linenumber)
 {
   if (*linenumber > EDITOR.rowscount)
     *linenumber=EDITOR.rowscount;
@@ -437,15 +443,17 @@ struct erow* getCurrentRow()
 void editorMoveCursor (int key)
 {
   erow *currentRow = getCurrentRow();
+  if (currentRow->size < EDITOR.savedcursorx)
+    EDITOR.cursorx = EDITOR.savedcursorx;
 
   switch (key) {
     case KEY_RIGHT:
       EDITOR.isEndMode = 0;
-      if (currentRow && EDITOR.cursorx < currentRow->size)
-        EDITOR.cursorx++;
-      else if(currentRow && EDITOR.cursorx == currentRow->size) {
+      if (currentRow && EDITOR.cursorx < currentRow->size - 1)
+        editorMoveCursorx(EDITOR.cursorx+1);
+      else if(currentRow && EDITOR.cursorx == currentRow->size - 1) {
         EDITOR.cursory++;
-        EDITOR.cursorx=0;
+        editorMoveCursorx(0);
       }
       break;
     CASE_DOWN:
@@ -455,10 +463,10 @@ void editorMoveCursor (int key)
     case KEY_LEFT:
       EDITOR.isEndMode = 0;
       if (EDITOR.cursorx != 0) {
-        EDITOR.cursorx--;
+        editorMoveCursorx(EDITOR.cursorx-1);
       } else if (EDITOR.cursory > 0) {
         EDITOR.cursory--;
-        EDITOR.cursorx = getCurrentRow()->size;
+        editorMoveCursorx(getCurrentRow()->size);
       }
       break;
     CASE_UP:
@@ -480,13 +488,13 @@ void editorMoveCursor (int key)
       EDITOR.cursorx = firstNonSpace(currentRow->renderbuffer);
       break;
     case KEY_LINE_END:
-      EDITOR.cursorx = currentRow? currentRow->size:0;
+      EDITOR.cursorx = currentRow? currentRow->size-1:0;
       EDITOR.isEndMode = 1;
       break;
   }
   currentRow = getCurrentRow();
 
-  int currentRowLength = currentRow ? currentRow->size : 0;
+  int currentRowLength = currentRow ? currentRow->size-1 : 0;
   if (EDITOR.cursorx > currentRowLength || EDITOR.isEndMode)
     EDITOR.cursorx = currentRowLength;
 
@@ -523,7 +531,6 @@ void editorHandleNormalMode(char keyChar) {
       break;
     case ':':
       EDITOR.mode = MODE_COMMAND;
-      // disableRawMode();
     break;
     case 'g':
       abAppend(&EDITOR.sequence, &keyChar ,1);
@@ -546,7 +553,7 @@ void editorHandleNormalMode(char keyChar) {
       break;
     case BOTTOM:
       if (EDITOR.numberSequenceInt) 
-        editorMoveCursorToLine(&EDITOR.numberSequenceInt);
+        editorMoveCursoryToLine(&EDITOR.numberSequenceInt);
       else
         editorMoveCursor(keyChar);
       break;
@@ -562,7 +569,7 @@ void editorHandleNormalMode(char keyChar) {
   if (EDITOR.sequence.length > 1) {
     if (strstr(EDITOR.sequence.buffer, "gg") != NULL) {
       if (EDITOR.numberSequenceInt)
-        editorMoveCursorToLine(&EDITOR.numberSequenceInt);
+        editorMoveCursoryToLine(&EDITOR.numberSequenceInt);
       else
         editorMoveCursor(TOP);
       
@@ -575,6 +582,7 @@ void editorHandleNormalMode(char keyChar) {
 void initEditor()
 {
   EDITOR.cursorx = 0;
+  EDITOR.savedcursorx = 0;
   EDITOR.cursory = 0;
   EDITOR.rowscount = 0;
   EDITOR.rowoffset = 0;
