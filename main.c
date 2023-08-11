@@ -171,8 +171,6 @@ int getCursorPosition(int *rows, int *cols)
   if (sscanf(&buf[2], "%d;%d", rows, cols) != 2) 
     return EXIT_FAILURE;
 
-  // we want the last row to be for our commands
-  *rows-=1;
   return EXIT_SUCCESS;
 }
 
@@ -184,8 +182,7 @@ int getWindowSize(int *rows, int *cols)
     return getCursorPosition(rows, cols);
   } else {
     *cols = ws.ws_col;
-    // we want the last row to be for our commands
-    *rows = ws.ws_row-1;
+    *rows = ws.ws_row;
     return EXIT_SUCCESS;
   }
 }
@@ -210,7 +207,7 @@ void editorUpdateRow(erow *row)
       tabs++;
 
   free(row->renderbuffer);
-  row->renderbuffer = malloc(row->size+1  + tabs*(TAB_WIDTH-1));
+  row->renderbuffer = malloc(row->size+1 + tabs*(TAB_WIDTH-1));
 
   int index = 0;
   for (int i = 0; i < row->size; ++i)
@@ -289,6 +286,9 @@ void editorScroll()
     EDITOR.coloffset = EDITOR.renderx;
   if (EDITOR.renderx >= EDITOR.coloffset + EDITOR.screencols)
     EDITOR.coloffset = EDITOR.renderx - EDITOR.screencols + 1;
+
+  if (EDITOR.rows[EDITOR.cursory].size <= EDITOR.screencols)
+    EDITOR.coloffset = 0;
 }
 
 void editorDrawRows(struct appendBuffer *ab)
@@ -318,6 +318,8 @@ void editorDrawRows(struct appendBuffer *ab)
       int len = EDITOR.rows[filerow].rendersize - EDITOR.coloffset;
       if (len < 0) 
         len = 0;
+      if (len > EDITOR.screencols)
+        len = EDITOR.screencols;
       abAppend(ab, &EDITOR.rows[filerow].renderbuffer[EDITOR.coloffset], len);
     }
 
@@ -372,7 +374,7 @@ void editorMoveCursorToLine(int *linenumber)
   if (*linenumber < 0)
     *linenumber = -(*linenumber);
 
-  EDITOR.cursory = *linenumber;
+  EDITOR.cursory = *linenumber-1;
   EDITOR.rowoffset = 0;
   *linenumber=0;
   // move cursor with zero key so it gets aligned
@@ -432,9 +434,9 @@ void editorMoveCursor (int key)
       EDITOR.cursorx = firstNonSpace(currentRow->renderbuffer);
       break;
     case KEY_LINE_END:
-      EDITOR.cursorx = currentRow->size;
+      EDITOR.cursorx = currentRow? currentRow->size:0;
       EDITOR.isEndMode = 1;
-    break;
+      break;
   }
   currentRow = getCurrentRow();
 
@@ -466,7 +468,6 @@ void editorHandleNormalMode(char keyChar) {
       abReinit(&EDITOR.numberSequence);
     }
   }
-
 
   switch (keyChar) {
     case CTRL_KEY('q'):
@@ -542,6 +543,8 @@ void initEditor()
 
   if (getWindowSize(&EDITOR.screenrows, &EDITOR.screencols) == EXIT_FAILURE)
     die("getWindowSize");
+  // we want the last row to be for our commands
+  EDITOR.screenrows -= 1;
 }
 int main(int argc, char *argv[])
 { 
