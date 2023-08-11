@@ -5,6 +5,7 @@
 #define _GNU_SOURCE
 #include <ctype.h>
 #include <errno.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -251,7 +252,7 @@ void editorOpen(char *filename)
   size_t linecap = 0;
   ssize_t linelen;
 
-  while ((linelen = getline(&line, &linecap, fptr)) != -1)
+  while ((linelen = getline(&line, &linecap, fptr)) != -1) {
     if (linelen != -1) {
       while (linelen > 0 && (line[linelen - 1] == '\n' ||
                              line[linelen - 1] == '\r'))
@@ -259,6 +260,7 @@ void editorOpen(char *filename)
 
       editorAppendRow(line, linelen);
     }
+}
 
   free(line);
   fclose(fptr);
@@ -326,10 +328,53 @@ void editorDrawRows(struct appendBuffer *ab)
     // erase in line
     abAppend(ab, "\x1b[K", 3);
 
-    if(y < EDITOR.screenrows - 1)
+    // if(y < EDITOR.screenrows - 1)
       abAppend(ab, "\r\n", 2);
   }
 }
+
+void editorDrawStatusBar(struct appendBuffer *ab) 
+{
+  // invert colors
+  // abAppend(ab, "\x1b[7m", 4);
+  int len = 0;
+  while (len < EDITOR.screencols) {
+    if (len == EDITOR.screencols - 17) {
+      char buf[13];
+      int bufLength = snprintf(buf, sizeof(buf), "%d,%d", EDITOR.cursory+1, EDITOR.cursorx+1);
+      abAppend(ab, buf, bufLength);
+      len+=bufLength;
+    } else if (len == EDITOR.screencols-4) {
+      char buf[4];
+      int scrollPercentage = round((double)EDITOR.rowoffset/(EDITOR.rowscount-EDITOR.screenrows)*100);
+      if (EDITOR.rowscount < EDITOR.screenrows)
+        scrollPercentage = -1;
+      
+      int bufLength = 0;
+      switch (scrollPercentage) {
+        case -1:
+        bufLength = snprintf(buf, sizeof(buf), "%s", "All");
+        break;
+        case 0:
+        bufLength = snprintf(buf, sizeof (buf), "%s", "Top");
+        break;
+        case 100:
+        bufLength = snprintf(buf, sizeof (buf), "%s", "Bot");
+        break;
+        default:
+        bufLength = snprintf(buf, sizeof (buf), "%d%%", scrollPercentage);
+        break;
+      }
+      abAppend(ab, buf, bufLength);
+      len+=bufLength;
+    } else {
+      abAppend(ab, " ", 1);
+      len++;
+    }
+  }
+  // abAppend(ab, "\x1b[m", 3);
+}
+
 void editorRefreshScreen() 
 {
   editorScroll();
@@ -345,6 +390,7 @@ void editorRefreshScreen()
   abAppend(&ab, "\x1b[H", 3);
 
   editorDrawRows(&ab);
+  editorDrawStatusBar(&ab);
 
   abAppend(&ab, "\x1b[H", 3);
 
@@ -403,7 +449,7 @@ void editorMoveCursor (int key)
       }
       break;
     CASE_DOWN:
-      if (EDITOR.cursory < EDITOR.rowscount)
+      if (EDITOR.cursory < EDITOR.rowscount - 1)
         EDITOR.cursory++;
       break;
     case KEY_LEFT:
@@ -420,7 +466,7 @@ void editorMoveCursor (int key)
         EDITOR.cursory--;
       break;
     case BOTTOM:
-      EDITOR.cursory = EDITOR.rowscount;
+      EDITOR.cursory = EDITOR.rowscount - 1;
       break;
     case TOP:
       EDITOR.cursory = 0;
