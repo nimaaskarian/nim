@@ -331,10 +331,12 @@ void editorExecuteCommandRow()
   memmove(editor.commandRow.buffer, editor.commandRow.buffer+start, editor.commandRow.size);
   editor.commandRow.buffer[editor.commandRow.size] = '\0';
 
-  if (strcmp(editor.commandRow.buffer,"q") == 0) 
+  if (!strcmp(editor.commandRow.buffer,"q")) 
   {
     editorQuit();
   }
+  if (!strcmp(editor.commandRow.buffer,"nim"))
+    system("xdg-open http://github.com/nimaaskarian/nim");
 }
 void editorCommandChar (int keyChar)
 {
@@ -666,7 +668,7 @@ void editorMoveCursorLeft()
   if (editor.cursorx != 0) {
     editorSetCursorx(editor.cursorx-1);
   } else {
-    editorHandleMoveCursorNormal(KEY_UP);
+    editorMoveCursorUp();
     if (editor.cursory)
       editorSetCursorx(getCurrentRow()->size);
   }
@@ -882,12 +884,29 @@ void editorHandleNormalMode(char keyChar) {
     case 'i':
       editor.mode = MODE_INSERT;
       break;
+    case 'I':
+      editor.cursorx = firstNonSpace(getCurrentRow()->buffer,0);
+      editor.mode = MODE_INSERT;
+      break;
+    case 'a':
+      editor.cursorx++;
+      editor.mode = MODE_INSERT;
+      break;
+    case 'A':
+      editor.cursorx = getCurrentRow()->size;
+      editor.mode = MODE_INSERT;
+      break;
     case ':':
       editor.mode = MODE_COMMAND;
       editorRowInsertChar(&editor.commandRow,editor.commandRow.size, ':');
     break;
     case 'g':
       abAppend(&editor.sequence, &keyChar ,1);
+      break;
+    case 'x':
+      do {
+        editorRowDelChar(getCurrentRow(), editor.cursorx);
+      } while (--editor.numberSequenceInt > 0);
       break;
     case KEY_RIGHT:
     case KEY_LEFT:
@@ -977,6 +996,8 @@ int main(int argc, char *argv[])
 
       editor.commandRow.buffer = NULL;
       editor.commandRow.size = 0;
+      if (editor.mode == MODE_INSERT)
+        editorMoveCursorLeft();
 
       editor.mode = MODE_NORMAL;
     }
