@@ -6,21 +6,18 @@
 #define _GNU_SOURCE
 #include <ctype.h>
 #include <errno.h>
+#include <time.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <termios.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/types.h>
 // }}}
 // Assets {{{
-int charToDigit(char ch) 
-{
-  return ch - '0';
-} 
-
 size_t firstNonSpace (const char* s, int start)
 {
   size_t output = start;
@@ -45,7 +42,7 @@ size_t reversedFirstNonSpace(const char* s, int start)
 // Defines {{{
 #define CTRL_KEY(k) ((k) & 0x1f)
 #define NIM_VERSION "0.0.1"
-#define TAB_WIDTH 1
+#define TAB_WIDTH 8
 enum EditorKey {
   KEY_LEFT = 'h',
   KEY_RIGHT = 'l',
@@ -126,6 +123,7 @@ struct Editor {
   unsigned int rowscount;
   EditorRow* rows;
   EditorRow commandRow;
+  struct appendBuffer wroteMessage;
   char *filename;
   struct termios orig_termios;
 };
@@ -235,6 +233,16 @@ int getWindowSize(int *rows, int *cols)
 }
 // }}}
 // Row operations {{{
+void editorRemoveRow(int at)
+{
+  if (at < 0 || at > editor.rowscount)
+    return;
+
+  for (int i=at-1; i < editor.rowscount; i++)
+    editor.rows[i] = editor.rows[i+1];
+
+  editor.rowscount--;
+}
 int editorRowCursorxToRenderx(EditorRow *row, int cursorx)
 {
   int renderx = 0;
@@ -320,6 +328,89 @@ void editorQuit()
   write(STDOUT_FILENO, "\x1b[H", 3);
   exit(EXIT_SUCCESS);
 }
+void editorInsertChar(int keyChar) 
+{
+  if (keyChar == BACKSPACE) {
+    editorRowDelChar(getCurrentRow(), editor.cursorx-1);
+    editor.cursorx--;
+    return;
+  }
+
+  if (editor.cursory == editor.rowscount) {
+    editorAppendRow("", 0);
+  }
+  editorRowInsertChar(&editor.rows[editor.cursory], editor.cursorx, keyChar);
+  editor.cursorx++;
+}
+// }}}
+// File i/o {{{
+char *editorRowsToString(int *bufferLength)
+{
+  int totalLength = 0;
+  for (int i = 0; i < editor.rowscount; i++)
+    totalLength += editor.rows[i].size + 1;
+  *bufferLength = totalLength;
+
+  char *buffer = malloc(totalLength);
+  char *pointer = buffer;
+
+  for (int j = 0; j < editor.rowscount; j++) {
+    memcpy(pointer, editor.rows[j].buffer,editor.rows[j].size);
+    pointer += editor.rows[j].size;
+    *pointer = '\n';
+    pointer++;
+  }
+  return buffer;
+}
+
+void editorOpen(char *filename) 
+{
+  free(editor.filename);
+  editor.filename = strdup(filename);
+
+  FILE *fptr = fopen(filename, "r");
+  if (!fptr) die("fopen");
+
+  char *line = NULL;
+  size_t linecap = 0;
+  ssize_t linelen;
+
+  while ((linelen = getline(&line, &linecap, fptr)) != -1) {
+    if (linelen != -1) {
+      while (linelen > 0 && (line[linelen - 1] == '\n' ||
+                             line[linelen - 1] == '\r'))
+        linelen--;
+
+      editorAppendRow(line, linelen);
+    }
+}
+
+  free(line);
+  fclose(fptr);
+  
+}
+
+void editorWrite()
+{
+  if (editor.filename == NULL)
+    return;
+
+  int length;
+  char *buffer = editorRowsToString(&length);
+
+  int fd = open(editor.filename, O_RDWR | O_CREAT, 0644);
+
+  ftruncate(fd, length);
+  write(fd, buffer, length);
+  close(fd);
+  
+  char message[80];
+  int messageSize = sprintf(message, "\"%s\" %dL, %dB", editor.filename, editor.rowscount-1, length);
+  abAppend(&editor.wroteMessage, message, messageSize);
+  free(buffer);
+}
+// }}}
+// Command mode {{{
 void editorExecuteCommandRow()
 {
   int start = 0;
@@ -337,6 +428,14 @@ void editorExecuteCommandRow()
   }
   if (!strcmp(editor.commandRow.buffer,"nim"))
     system("xdg-open http://github.com/nimaaskarian/nim");
+
+  if (!strcmp(editor.commandRow.buffer,"w"))
+    editorWrite();
+
+  if (!strcmp(editor.commandRow.buffer,"wq") | !strcmp(editor.commandRow.buffer, "x")) {
+    editorWrite();
+    editorQuit();
+  }
 }
 void editorCommandChar (int keyChar)
 {
@@ -364,48 +463,6 @@ void editorCommandChar (int keyChar)
     return;
 
   editorRowInsertChar(&editor.commandRow,editor.commandRow.size, keyChar);
-}
-void editorInsertChar(int keyChar) 
-{
-  if (keyChar == BACKSPACE) {
-    editorRowDelChar(getCurrentRow(), editor.cursorx-1);
-    editor.cursorx--;
-    return;
-  }
-
-  if (editor.cursory == editor.rowscount) {
-    editorAppendRow("", 0);
-  }
-  editorRowInsertChar(&editor.rows[editor.cursory], editor.cursorx, keyChar);
-  editor.cursorx++;
-}
-// }}}
-// File i/o {{{
-void editorOpen(char *filename) 
-{
-  free(editor.filename);
-  editor.filename = strdup(filename);
-
-  FILE *fptr = fopen(filename, "r");
-  if (!fptr) die("fopen");
-
-  char *line = NULL;
-  size_t linecap = 0;
-  ssize_t linelen;
-
-  while ((linelen = getline(&line, &linecap, fptr)) != -1) {
-    if (linelen != -1) {
-      while (linelen > 0 && (line[linelen - 1] == '\n' ||
-                             line[linelen - 1] == '\r'))
-        linelen--;
-
-      editorAppendRow(line, linelen);
-    }
-}
-
-  free(line);
-  fclose(fptr);
-  
 }
 // }}}
 // Output {{{
@@ -503,13 +560,21 @@ int editorDrawCommand(struct appendBuffer *ab)
   abAppend(ab, editor.commandRow.buffer, editor.commandRow.size);
   return editor.commandRow.size;
 }
+
 void editorDrawStatusBar(struct appendBuffer *ab) 
 {
   // invert colors
   // abAppend(ab, "\x1b[7m", 4);
   int len = 0;
   if (editor.mode == MODE_COMMAND) {
+    free(editor.wroteMessage.buffer);
+    editor.wroteMessage.buffer = NULL;
+    editor.wroteMessage.length=0;
     len += editorDrawCommand(ab);
+  }
+  if (editor.wroteMessage.length) {
+    abAppend(ab,editor.wroteMessage.buffer, editor.wroteMessage.length);
+    len+=editor.wroteMessage.length;
   }
 
   while (len < editor.screencols) {
@@ -656,10 +721,6 @@ void editorMoveCursorRight()
   editor.isEndMode = 0;
   if (currentRow && editor.cursorx < currentRow->size - 1)
     editorSetCursorx(editor.cursorx+1);
-  else if(currentRow && editor.cursorx == currentRow->size - 1) {
-    editor.cursory++;
-    editorSetCursorx(0);
-  }
 }
 
 void editorMoveCursorLeft()
@@ -667,11 +728,7 @@ void editorMoveCursorLeft()
   editor.isEndMode = 0;
   if (editor.cursorx != 0) {
     editorSetCursorx(editor.cursorx-1);
-  } else {
-    editorMoveCursorUp();
-    if (editor.cursory)
-      editorSetCursorx(getCurrentRow()->size);
-  }
+  } 
 }
 
 int isRowAllSpace(EditorRow *er)
@@ -900,6 +957,9 @@ void editorHandleNormalMode(char keyChar) {
       editor.mode = MODE_COMMAND;
       editorRowInsertChar(&editor.commandRow,editor.commandRow.size, ':');
     break;
+    case 'd':
+      abAppend(&editor.sequence, &keyChar, 1);
+      break;
     case 'g':
       abAppend(&editor.sequence, &keyChar ,1);
       break;
@@ -948,7 +1008,14 @@ void editorHandleNormalMode(char keyChar) {
         editorMoveCursoryToLine(&editor.numberSequenceInt);
       else
         editorHandleMoveCursorNormal(TOP);
-      
+    }
+
+    if (strstr(editor.sequence.buffer, "dd") != NULL) {
+      editorRemoveRow(editor.cursory+1);
+      for (int i=0; i < editor.rowscount; i++)
+        editorUpdateRow(&editor.rows[i]);
+      if (editor.cursory > editor.rowscount-1)
+        editor.cursory = editor.rowscount-1;
     }
     abReinit(&editor.sequence);
   }
@@ -971,6 +1038,8 @@ void initEditor()
 
   editor.commandRow.buffer = NULL;
   editor.commandRow.size = 0;
+
+  abReinit(&editor.wroteMessage);
 
   abReinit(&editor.sequence);
   abReinit(&editor.numberSequence);
