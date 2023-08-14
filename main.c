@@ -59,6 +59,8 @@ enum EditorKey {
   WORD_BACK = 'b',
   BOTTOM = 'G',
   ESC = 27,
+  BACKSPACE = 127,
+  ENTER = 13,
   TOP = 1000,
 };
 #define CASE_DOWN case KEY_DOWN: case '+'
@@ -123,9 +125,18 @@ struct Editor {
   int screenrows, screencols;
   unsigned int rowscount;
   EditorRow* rows;
+  EditorRow commandRow;
+  char *filename;
   struct termios orig_termios;
 };
 struct Editor editor;
+EditorRow* getCurrentRow()
+{
+  if (editor.cursory >= editor.rowscount)
+    return NULL;
+  
+  return &editor.rows[editor.cursory];
+}
 // }}}
 // Range {{{
 struct Range {
@@ -286,10 +297,93 @@ void editorAppendRow(char *s, size_t len)
 
   editor.rowscount++;
 }
+void editorRowInsertChar(EditorRow *row, int index, int charToInsert) {
+  if (index < 0 || index > row->size) index = row->size;
+  row->buffer = realloc(row->buffer, row->size + 2);
+  memmove(&row->buffer[index + 1], &row->buffer[index], row->size - index + 1);
+  row->size++;
+  row->buffer[index] = charToInsert;
+  editorUpdateRow(row);
+}
+void editorRowDelChar(EditorRow *row, int index) {
+  if (index < 0 || index >= row->size) return;
+  memmove(&row->buffer[index], &row->buffer[index + 1], row->size - index);
+  row->size--;
+  editorUpdateRow(row);
+  // editor.dirty++;
+}
+// }}}
+// Editor operations {{{
+void editorQuit()
+{
+  write(STDOUT_FILENO, "\x1b[2J", 4);
+  write(STDOUT_FILENO, "\x1b[H", 3);
+  exit(EXIT_SUCCESS);
+}
+void editorExecuteCommandRow()
+{
+  int start = 0;
+
+  while (editor.commandRow.buffer[start] == ':') {
+    start++;
+  }
+  editor.commandRow.size-=start;
+  memmove(editor.commandRow.buffer, editor.commandRow.buffer+start, editor.commandRow.size);
+  editor.commandRow.buffer[editor.commandRow.size] = '\0';
+
+  if (strcmp(editor.commandRow.buffer,"q") == 0) 
+  {
+    editorQuit();
+  }
+}
+void editorCommandChar (int keyChar)
+{
+  if (keyChar == ENTER) {
+    editorExecuteCommandRow();
+    free(editor.commandRow.buffer);
+    editor.commandRow.buffer = NULL;
+    editor.commandRow.size = 0;
+    editor.mode = MODE_NORMAL;
+    return;
+  }
+  if (keyChar == BACKSPACE) {
+    editorRowDelChar(&editor.commandRow, editor.commandRow.size-1);
+    return;
+  }
+  if (keyChar == CTRL_KEY('u')) {
+    free(editor.commandRow.buffer);
+    editor.commandRow.buffer = NULL;
+    editor.commandRow.size = 0;
+    editorRowInsertChar(&editor.commandRow,editor.commandRow.size, ':');
+    return;
+  }
+
+  if (iscntrl(keyChar))
+    return;
+
+  editorRowInsertChar(&editor.commandRow,editor.commandRow.size, keyChar);
+}
+void editorInsertChar(int keyChar) 
+{
+  if (keyChar == BACKSPACE) {
+    editorRowDelChar(getCurrentRow(), editor.cursorx-1);
+    editor.cursorx--;
+    return;
+  }
+
+  if (editor.cursory == editor.rowscount) {
+    editorAppendRow("", 0);
+  }
+  editorRowInsertChar(&editor.rows[editor.cursory], editor.cursorx, keyChar);
+  editor.cursorx++;
+}
 // }}}
 // File i/o {{{
 void editorOpen(char *filename) 
 {
+  free(editor.filename);
+  editor.filename = strdup(filename);
+
   FILE *fptr = fopen(filename, "r");
   if (!fptr) die("fopen");
 
@@ -401,12 +495,21 @@ void editorDrawRows(struct appendBuffer *ab)
       abAppend(ab, "\r\n", 2);
   }
 }
+int editorDrawCommand(struct appendBuffer *ab) 
+{
 
+  abAppend(ab, editor.commandRow.buffer, editor.commandRow.size);
+  return editor.commandRow.size;
+}
 void editorDrawStatusBar(struct appendBuffer *ab) 
 {
   // invert colors
   // abAppend(ab, "\x1b[7m", 4);
   int len = 0;
+  if (editor.mode == MODE_COMMAND) {
+    len += editorDrawCommand(ab);
+  }
+
   while (len < editor.screencols) {
     if (len == editor.screencols - 17) {
       char buf[13];
@@ -466,7 +569,7 @@ void editorRefreshScreen()
   // move cursor to cursor position
   char buf[32];
   if (editor.mode == MODE_COMMAND)
-    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", editor.screencols, 1);
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", editor.screencols, editor.commandRow.size+1);
   else
     snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (editor.cursory-editor.rowoffset)+1,
                                               (editor.renderx-editor.coloffset)+1);
@@ -480,13 +583,6 @@ void editorRefreshScreen()
 }
 // }}}
 // Input {{{
-EditorRow* getCurrentRow()
-{
-  if (editor.cursory >= editor.rowscount)
-    return NULL;
-  
-  return &editor.rows[editor.cursory];
-}
 int editorEndOfTheWord(int start) {
   int end = start;
 
@@ -637,20 +733,20 @@ void editorMoveCursorWordBack()
   if (editor.cursorx <= 0)
     if (editorMoveCursorUp() == EXIT_SUCCESS) {
       currentRow = getCurrentRow();
-      editor.cursorx = currentRow->size-1;
+      editorSetCursorx(currentRow->size-1);
     }
 
   char currentChar = currentRow->buffer[editor.cursorx];
   int lastIndex = currentSequenceFirstIndex(editor.cursorx);
 
   if (editor.cursorx == lastIndex) {
-    editor.cursorx = reversedFirstNonSpace(currentRow->buffer, editor.cursorx+1);
-    editor.cursorx = currentSequenceFirstIndex(editor.cursorx);
+    editorSetCursorx(reversedFirstNonSpace(currentRow->buffer, editor.cursorx+1));
+    editorSetCursorx(currentSequenceFirstIndex(editor.cursorx));
   } else
-    editor.cursorx = lastIndex;
+     editorSetCursorx(lastIndex);
 
   while (isspace(currentRow->buffer[editor.cursorx])) {
-    editor.cursorx--;
+    editorSetCursorx(editor.cursorx-1);
     if (editor.cursorx <= 0) {
       break;
     }
@@ -783,13 +879,12 @@ void editorHandleNormalMode(char keyChar) {
   }
 
   switch (keyChar) {
-    case CTRL_KEY('q'):
-      write(STDOUT_FILENO, "\x1b[2J", 4);
-      write(STDOUT_FILENO, "\x1b[H", 3);
-      exit(EXIT_SUCCESS);
+    case 'i':
+      editor.mode = MODE_INSERT;
       break;
     case ':':
       editor.mode = MODE_COMMAND;
+      editorRowInsertChar(&editor.commandRow,editor.commandRow.size, ':');
     break;
     case 'g':
       abAppend(&editor.sequence, &keyChar ,1);
@@ -852,7 +947,11 @@ void initEditor()
   editor.numberSequenceInt = 0;
   editor.mode = MODE_NORMAL;
   editor.rows = NULL;
+  editor.filename = NULL;
   editor.isEndMode = 0;
+
+  editor.commandRow.buffer = NULL;
+  editor.commandRow.size = 0;
 
   abReinit(&editor.sequence);
   abReinit(&editor.numberSequence);
@@ -875,11 +974,26 @@ int main(int argc, char *argv[])
     if (ch == ESC) {
       abReinit(&editor.sequence);
       abReinit(&editor.numberSequence);
+
+      editor.commandRow.buffer = NULL;
+      editor.commandRow.size = 0;
+
       editor.mode = MODE_NORMAL;
     }
     else {
-      if (editor.mode == MODE_NORMAL)
-        editorHandleNormalMode(ch);
+      switch (editor.mode) {
+        case MODE_NORMAL:
+          editorHandleNormalMode(ch);
+          break;
+        case MODE_INSERT:
+          editorInsertChar(ch);
+          break;
+        case MODE_COMMAND:
+          editorCommandChar(ch);
+          if (editor.commandRow.size == 0)
+            editor.mode = MODE_NORMAL;
+          break;
+      }
     }
   } 
   abFree(&editor.sequence);
