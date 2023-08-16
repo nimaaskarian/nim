@@ -18,7 +18,7 @@
 #include <sys/types.h>
 // }}}
 // Assets {{{
-size_t firstNonSpace (const char* s, int start)
+size_t firstNonSpaceFromStart (const char* s, int start)
 {
   size_t output = start;
   while(isspace(s[output]))
@@ -239,17 +239,6 @@ void editorFreeRow(EditorRow *row) {
   free(row->renderbuffer);
   free(row->buffer);
 }
-void editorDeleteRow(int at)
-{
-  if (at < 0 || at > editor.rowscount - 1)
-    return;
-
-  editorFreeRow(&editor.rows[at]);
-
-  memmove(&editor.rows[at], &editor.rows[at+1], sizeof(EditorRow)*(editor.rowscount-at-1));
-
-  editor.rowscount--;
-}
 int editorRowCursorxToRenderx(EditorRow *row, int cursorx)
 {
   int renderx = 0;
@@ -326,7 +315,29 @@ void editorRowInsertChar(EditorRow *row, int index, int charToInsert) {
   row->buffer[index] = charToInsert;
   editorUpdateRow(row);
 }
-void editorRowDelChar(EditorRow *row, int index) {
+
+void editorDeleteRow(int at)
+{
+  if (at < 0 || at > editor.rowscount - 1)
+    return;
+  editorFreeRow(&editor.rows[at]);
+  memmove(&editor.rows[at], &editor.rows[at+1], sizeof(EditorRow)*(editor.rowscount-at-1));
+  editor.rowscount--;
+}
+
+void editorRowAppendString(EditorRow *row, char *string, size_t length)
+{
+  // +1 for '\0'
+  row->buffer = realloc(row->buffer, row->size + length + 1);
+  // copy string with length to last+1 item of array
+  memcpy(&row->buffer[row->size], string,length);
+  row->size += length;
+  row->buffer[row->size] = '\0';
+
+  editorUpdateRow(row);
+}
+
+void editorRowDeleteChar(EditorRow *row, int index) {
   if (index < 0 || index >= row->size) return;
   memmove(&row->buffer[index], &row->buffer[index + 1], row->size - index);
   row->size--;
@@ -447,7 +458,7 @@ void editorCommandChar (int keyChar)
     return;
   }
   if (keyChar == BACKSPACE) {
-    editorRowDelChar(&editor.commandRow, editor.commandRow.size-1);
+    editorRowDeleteChar(&editor.commandRow, editor.commandRow.size-1);
     return;
   }
   if (keyChar == CTRL_KEY('u')) {
@@ -754,7 +765,7 @@ int currentSequenceFirstIndex(int start) {
     if (editorCharWordType(currentRow->buffer[i]) != editorCharWordType(currentRow->buffer[i+1]))
       return i;
 
-  return firstNonSpace(currentRow->buffer,0);
+  return firstNonSpaceFromStart(currentRow->buffer,0);
 }
 
 void editorMoveCursorWordEnd()
@@ -777,7 +788,7 @@ void editorMoveCursorWordEnd()
   int lastIndex = currentSequenceLastIndex(editor.cursorx);
 
   if (editor.cursorx == lastIndex) {
-    editor.cursorx=firstNonSpace(currentRow->buffer, editor.cursorx+1);
+    editor.cursorx=firstNonSpaceFromStart(currentRow->buffer, editor.cursorx+1);
     editor.cursorx=currentSequenceLastIndex(editor.cursorx);
   } else
     editor.cursorx = lastIndex;
@@ -824,7 +835,7 @@ void editorMoveCursorWordStart()
 
   char currentChar = currentRow->buffer[editor.cursorx];
   if (isspace(currentChar)) {
-    editor.cursorx = firstNonSpace(currentRow->buffer, editor.cursorx);
+    editor.cursorx = firstNonSpaceFromStart(currentRow->buffer, editor.cursorx);
     return;
   }
 
@@ -843,7 +854,7 @@ void editorMoveCursorWordStart()
   }
 
   if (editorMoveCursorDown() == EXIT_SUCCESS) {
-    editor.cursorx = firstNonSpace(getCurrentRow()->buffer, 0);
+    editor.cursorx = firstNonSpaceFromStart(getCurrentRow()->buffer, 0);
   }
 
   while(isRowAllSpace(getCurrentRow())){
@@ -891,7 +902,7 @@ void editorHandleMoveCursorNormal (int key)
       break;
     case KEY_LINE_START:
       editor.isEndMode = 0;
-      editor.cursorx = firstNonSpace(currentRow->buffer, 0);
+      editor.cursorx = firstNonSpaceFromStart(currentRow->buffer, 0);
       break;
     case KEY_LINE_END:
       editor.cursorx = currentRow? currentRow->size-1:0;
@@ -941,7 +952,7 @@ void editorHandleNormalMode(char keyChar) {
       editor.mode = MODE_INSERT;
       break;
     case 'I':
-      editor.cursorx = firstNonSpace(getCurrentRow()->buffer,0);
+      editor.cursorx = firstNonSpaceFromStart(getCurrentRow()->buffer,0);
       editor.mode = MODE_INSERT;
       break;
     case 'a':
@@ -952,6 +963,31 @@ void editorHandleNormalMode(char keyChar) {
       editor.cursorx = getCurrentRow()->size;
       editor.mode = MODE_INSERT;
       break;
+    case 'D':
+      for (int i = getCurrentRow()->size-1; i >= editor.cursorx; i--) {
+        editorRowDeleteChar(getCurrentRow(), i);
+      }
+      break;
+    case 'J': {
+      if (editor.cursory + 1 < editor.rowscount) {
+        char *nextRowBufferWithSpace;
+        EditorRow nextRow = editor.rows[editor.cursory+1];
+        int start = firstNonSpaceFromStart(nextRow.buffer, 0);
+
+        FILE *fptr;
+        fptr = fopen("log.txt", "a");
+        fprintf(fptr,"start: %d\n", start);
+        fclose(fptr);
+
+        memmove(&nextRow.buffer[start], &nextRow.buffer[0], nextRow.size-start);
+
+        size_t size = sprintf(nextRowBufferWithSpace, " %s", nextRow.buffer);
+        editorRowAppendString(getCurrentRow(), nextRowBufferWithSpace, size);
+        editorDeleteRow(editor.cursory+1);
+
+      }
+        break;
+      }
     case ':':
       editor.mode = MODE_COMMAND;
       editorRowInsertChar(&editor.commandRow,editor.commandRow.size, ':');
@@ -984,8 +1020,10 @@ void editorHandleNormalMode(char keyChar) {
       break;
     case 'x':
       do {
-        editorRowDelChar(getCurrentRow(), editor.cursorx);
+        editorRowDeleteChar(getCurrentRow(), editor.cursorx);
       } while (--editor.numberSequenceInt > 0);
+      if (editor.cursorx > getCurrentRow()->size - 1)
+        editor.cursorx = getCurrentRow()->size-1;
       break;
     case KEY_RIGHT:
     case KEY_LEFT:
@@ -1054,7 +1092,7 @@ void editorHandleNormalMode(char keyChar) {
     } else if (startx != endx) {
 
       for (int i=startx; i < endx; i++) {
-        editorRowDelChar(getCurrentRow(), startx);
+        editorRowDeleteChar(getCurrentRow(), startx);
         editor.cursorx--;
       }
       editorUpdateRow(getCurrentRow());
@@ -1068,12 +1106,12 @@ void editorInsertChar(int keyChar)
 {
   switch (keyChar) {
     case BACKSPACE:
-      editorRowDelChar(getCurrentRow(), editor.cursorx-1);
+      editorRowDeleteChar(getCurrentRow(), editor.cursorx-1);
       editor.cursorx--;
       break;
     case CTRL_KEY('u'):
       for (int i = editor.cursorx-1; i >= 0; i--) {
-        editorRowDelChar(getCurrentRow(), i);
+        editorRowDeleteChar(getCurrentRow(), i);
         editor.cursorx--;
       }
       editorUpdateRow(getCurrentRow());
