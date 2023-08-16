@@ -41,7 +41,7 @@ size_t reversedFirstNonSpace(const char* s, int start)
 // }}}
 // Defines {{{
 #define CTRL_KEY(k) ((k) & 0x1f)
-#define NIM_VERSION "0.0.1"
+#define NIM_VERSION "0.1.0"
 #define TAB_WIDTH 8
 enum EditorKey {
   KEY_LEFT = 'h',
@@ -110,14 +110,16 @@ typedef struct EditorRow {
   char *buffer, *renderbuffer;
 } EditorRow;
 struct Editor {
-  struct appendBuffer sequence;
+  char sequenceFirst;
   struct appendBuffer numberSequence;
   int numberSequenceInt;
   enum Mode mode;
   int cursorx, cursory;
+  int beforeDeletex, beforeDeletey;
   int savedcursorx;
   int renderx;
   int isEndMode;
+  int deleteFlag;
   int rowoffset, coloffset;
   int screenrows, screencols;
   unsigned int rowscount;
@@ -233,13 +235,18 @@ int getWindowSize(int *rows, int *cols)
 }
 // }}}
 // Row operations {{{
-void editorRemoveRow(int at)
+void editorFreeRow(EditorRow *row) {
+  free(row->renderbuffer);
+  free(row->buffer);
+}
+void editorDeleteRow(int at)
 {
-  if (at < 0 || at > editor.rowscount)
+  if (at < 0 || at > editor.rowscount - 1)
     return;
 
-  for (int i=at-1; i < editor.rowscount; i++)
-    editor.rows[i] = editor.rows[i+1];
+  editorFreeRow(&editor.rows[at]);
+
+  memmove(&editor.rows[at], &editor.rows[at+1], sizeof(EditorRow)*(editor.rowscount-at-1));
 
   editor.rowscount--;
 }
@@ -288,6 +295,12 @@ void editorUpdateRow(EditorRow *row)
   row->renderbuffer[index] = '\0';
   row->rendersize = index;
 }
+
+void editorUpdateAllRows(){
+  for (int i=0; i < editor.rowscount; i++)
+    editorUpdateRow(&editor.rows[i]);
+}
+
 void editorAppendRow(char *s, size_t len)
 {
   editor.rows = realloc(editor.rows, sizeof(EditorRow) * (editor.rowscount+1));
@@ -327,20 +340,6 @@ void editorQuit()
   write(STDOUT_FILENO, "\x1b[2J", 4);
   write(STDOUT_FILENO, "\x1b[H", 3);
   exit(EXIT_SUCCESS);
-}
-void editorInsertChar(int keyChar) 
-{
-  if (keyChar == BACKSPACE) {
-    editorRowDelChar(getCurrentRow(), editor.cursorx-1);
-    editor.cursorx--;
-    return;
-  }
-
-  if (editor.cursory == editor.rowscount) {
-    editorAppendRow("", 0);
-  }
-  editorRowInsertChar(&editor.rows[editor.cursory], editor.cursorx, keyChar);
-  editor.cursorx++;
 }
 // }}}
 // File i/o {{{
@@ -586,7 +585,7 @@ void editorDrawStatusBar(struct appendBuffer *ab)
     } else if (len == editor.screencols-4) {
       char buf[4];
       int scrollPercentage = round((double)editor.rowoffset/(editor.rowscount-editor.screenrows)*100);
-      if (editor.rowscount < editor.screenrows)
+      if (editor.rowscount <= editor.screenrows)
         scrollPercentage = -1;
       
       int bufLength = 0;
@@ -956,12 +955,32 @@ void editorHandleNormalMode(char keyChar) {
     case ':':
       editor.mode = MODE_COMMAND;
       editorRowInsertChar(&editor.commandRow,editor.commandRow.size, ':');
-    break;
+      break;
     case 'd':
-      abAppend(&editor.sequence, &keyChar, 1);
+      editor.deleteFlag = 1;
+      editor.beforeDeletex = editor.cursorx;
+      editor.beforeDeletey = editor.cursory;
+      if (editor.sequenceFirst == 'd') {
+        editorDeleteRow(editor.cursory);
+        editorUpdateAllRows();
+        if (editor.cursory > editor.rowscount-1)
+          editor.cursory = editor.rowscount-1;
+      } else {
+        editor.sequenceFirst = 'd';
+        return;
+      }
       break;
     case 'g':
-      abAppend(&editor.sequence, &keyChar ,1);
+      if (editor.sequenceFirst == 'g') {
+        if (editor.numberSequenceInt)
+          editorMoveCursoryToLine(&editor.numberSequenceInt);
+        else
+          editorHandleMoveCursorNormal(TOP);
+      }
+      else {
+        editor.sequenceFirst = 'g';
+        return;
+      }
       break;
     case 'x':
       do {
@@ -995,29 +1014,77 @@ void editorHandleNormalMode(char keyChar) {
       break;
     case CTRL_KEY('f'):
       editor.cursory+=editor.screenrows;
-      editorHandleMoveCursorNormal(0);
+      if (editor.cursory > editor.rowscount-1)
+        editor.cursory = editor.rowscount-1;
       break;
     case CTRL_KEY('b'):
       editor.cursory-=editor.screenrows;
-      editorHandleMoveCursorNormal(0);
+      if (editor.cursory < 0)
+        editor.cursory = 0;
       break;
   }
-  if (editor.sequence.length > 1) {
-    if (strstr(editor.sequence.buffer, "gg") != NULL) {
-      if (editor.numberSequenceInt)
-        editorMoveCursoryToLine(&editor.numberSequenceInt);
-      else
-        editorHandleMoveCursorNormal(TOP);
-    }
+  editor.sequenceFirst = '\0';
 
-    if (strstr(editor.sequence.buffer, "dd") != NULL) {
-      editorRemoveRow(editor.cursory+1);
-      for (int i=0; i < editor.rowscount; i++)
-        editorUpdateRow(&editor.rows[i]);
-      if (editor.cursory > editor.rowscount-1)
-        editor.cursory = editor.rowscount-1;
+  if (editor.deleteFlag) {
+    int starty = editor.cursory;
+    int endy = editor.beforeDeletey;
+
+    if (starty > endy) {
+      starty=editor.beforeDeletey;
+      endy = editor.cursory;
     }
-    abReinit(&editor.sequence);
+      
+    int startx = editor.cursorx;
+    int endx = editor.beforeDeletex;
+
+    if (startx > endx) {
+      startx=editor.beforeDeletex;
+      endx = editor.cursorx;
+    }
+    if (starty != endy) {
+      int deleteCount = 0;
+      for (int i=starty; i < endy+1; i++) {
+        editorDeleteRow(starty);
+        editorUpdateAllRows();
+        if (editor.cursory > 0)
+          editor.cursory--;
+      }
+      // editorRemoveRow(editor.cursory+1);
+      // editorRemoveRow(start);
+    } else if (startx != endx) {
+
+      for (int i=startx; i < endx; i++) {
+        editorRowDelChar(getCurrentRow(), startx);
+        editor.cursorx--;
+      }
+      editorUpdateRow(getCurrentRow());
+    }
+    editor.deleteFlag = 0;
+  }
+}
+// }}}
+// Insert mode {{{ 
+void editorInsertChar(int keyChar) 
+{
+  switch (keyChar) {
+    case BACKSPACE:
+      editorRowDelChar(getCurrentRow(), editor.cursorx-1);
+      editor.cursorx--;
+      break;
+    case CTRL_KEY('u'):
+      for (int i = editor.cursorx-1; i >= 0; i--) {
+        editorRowDelChar(getCurrentRow(), i);
+        editor.cursorx--;
+      }
+      editorUpdateRow(getCurrentRow());
+      break;
+    default:
+      if (editor.cursory == editor.rowscount) {
+        editorAppendRow("", 0);
+      }
+      editorRowInsertChar(&editor.rows[editor.cursory], editor.cursorx, keyChar);
+      editor.cursorx++;
+      break;
   }
 }
 // }}}
@@ -1025,8 +1092,11 @@ void editorHandleNormalMode(char keyChar) {
 void initEditor()
 {
   editor.cursorx = 0;
-  editor.savedcursorx = 0;
   editor.cursory = 0;
+  editor.beforeDeletex = 0;
+  editor.beforeDeletey= 0;
+
+  editor.savedcursorx = 0;
   editor.rowscount = 0;
   editor.rowoffset = 0;
   editor.coloffset = 0;
@@ -1038,10 +1108,10 @@ void initEditor()
 
   editor.commandRow.buffer = NULL;
   editor.commandRow.size = 0;
+  editor.deleteFlag = 0;
 
   abReinit(&editor.wroteMessage);
 
-  abReinit(&editor.sequence);
   abReinit(&editor.numberSequence);
 
   if (getWindowSize(&editor.screenrows, &editor.screencols) == EXIT_FAILURE)
@@ -1060,7 +1130,6 @@ int main(int argc, char *argv[])
     editorRefreshScreen();
     char ch = editorReadKey();
     if (ch == ESC) {
-      abReinit(&editor.sequence);
       abReinit(&editor.numberSequence);
 
       editor.commandRow.buffer = NULL;
@@ -1086,7 +1155,6 @@ int main(int argc, char *argv[])
       }
     }
   } 
-  abFree(&editor.sequence);
   abFree(&editor.numberSequence);
   free(editor.rows);
   return EXIT_SUCCESS;
