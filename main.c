@@ -796,7 +796,7 @@ int currentSequenceLastIndex(int start) {
   return currentRow->size - 1;
 }
 
-int currentSequenceFirstIndex(int start) {
+int currentSequenceLastIndexReversed(int start) {
   EditorRow *currentRow = getCurrentRow();
   for (int i = start-1; i > -1; --i) 
     if (editorCharWordType(currentRow->buffer[i]) != editorCharWordType(currentRow->buffer[i+1]))
@@ -846,11 +846,11 @@ void editorMoveCursorWordEndBack()
     }
 
   char currentChar = currentRow->buffer[editor.cursorx];
-  int lastIndex = currentSequenceFirstIndex(editor.cursorx);
+  int lastIndex = currentSequenceLastIndexReversed(editor.cursorx);
 
   if (editor.cursorx == lastIndex) {
     editorSetCursorx(reversedFirstNonSpace(currentRow->buffer, editor.cursorx+1));
-    editorSetCursorx(currentSequenceFirstIndex(editor.cursorx));
+    editorSetCursorx(currentSequenceLastIndexReversed(editor.cursorx));
   } else
      editorSetCursorx(lastIndex);
 
@@ -867,6 +867,19 @@ void editorMoveCursorWordEndBack()
     editor.cursorx = getCurrentRow()->size-1;
   }
 
+}
+
+void editorMoveCursorWordStartBack()
+{
+  if (editorCharWordType(getCurrentRow()->buffer[editor.cursorx]) 
+    != editorCharWordType(getCurrentRow()->buffer[editor.cursorx-1]))
+    editorMoveCursorWordEndBack();
+
+  while (editor.cursorx > 0) {
+    if (editorCharWordType(getCurrentRow()->buffer[editor.cursorx]) != editorCharWordType(getCurrentRow()->buffer[editor.cursorx-1]))
+      break;
+    editor.cursorx--;
+  }
 }
 
 void editorMoveCursorWordStart()
@@ -915,6 +928,9 @@ void editorHandleMoveCursorNormal (int key)
   switch (key) {
     case WORD_NEXT:
       editorMoveCursorWordStart();
+      break;
+    case WORD_BACK:
+      editorMoveCursorWordStartBack();
       break;
     case WORD_END:
       editorMoveCursorWordEnd();
