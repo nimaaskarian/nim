@@ -97,7 +97,7 @@ struct Editor {
   int savedcursorx;
   int renderx;
   int isEndMode;
-  int deleteFlag, findFlag;
+  int deleteFlag, findFlag, backToInsertFlag;
   int rowoffset, coloffset;
   int screenrows, screencols;
   unsigned int rowscount;
@@ -362,6 +362,20 @@ void editorRowDeleteChar(EditorRow *row, int index) {
   editorUpdateRow(row);
   // editor.dirty++;
 }
+
+void editorNewlineAtCursorx()
+{
+  if (editor.cursorx < getCurrentRow()->size -1) {
+    int newSize = getCurrentRow()->size - editor.cursorx;
+    editorAppendRowAt(strdup(&getCurrentRow()->buffer[editor.cursorx]), newSize, editor.cursory+1);
+    getCurrentRow()->size = editor.cursorx;
+    getCurrentRow()->buffer[editor.cursorx] = '\0';
+    editorUpdateRow(getCurrentRow());
+    editor.cursory++;
+  }
+  else
+    editorAppendRowAt("", 0, ++editor.cursory);
+}
 // }}}
 // Editor operations {{{
 void editorQuit()
@@ -396,25 +410,28 @@ void editorOpen(char *filename)
   free(editor.filename);
   editor.filename = strdup(filename);
 
-  FILE *fptr = fopen(filename, "r");
-  if (!fptr) die("fopen");
+  if (access(filename, F_OK) == 0) {
 
-  char *line = NULL;
-  size_t linecap = 0;
-  ssize_t linelen;
+    FILE *fptr = fopen(filename, "r");
+    if (!fptr) die("fopen");
 
-  while ((linelen = getline(&line, &linecap, fptr)) != -1) {
-    if (linelen != -1) {
-      while (linelen > 0 && (line[linelen - 1] == '\n' ||
-                             line[linelen - 1] == '\r'))
-        linelen--;
+    char *line = NULL;
+    size_t linecap = 0;
+    ssize_t linelen;
 
-      editorAppendRow(line, linelen);
+    while ((linelen = getline(&line, &linecap, fptr)) != -1) {
+      if (linelen != -1) {
+        while (linelen > 0 && (line[linelen - 1] == '\n' ||
+                               line[linelen - 1] == '\r'))
+          linelen--;
+
+        editorAppendRow(line, linelen);
+      }
     }
-}
 
-  free(line);
-  fclose(fptr);
+    free(line);
+    fclose(fptr);
+  }
   
 }
 
@@ -465,7 +482,7 @@ void editorExecuteCommandRow()
     editorQuit();
   }
 }
-void editorCommandChar (int keyChar)
+void editorHandleCommandMode (int keyChar)
 {
   if (keyChar == ENTER) {
     editorExecuteCommandRow();
@@ -520,6 +537,8 @@ enum WordType editorCharWordType(unsigned char ch)
 }
 void editorScroll()
 {
+  if (!editor.rowscount)
+    return;
   editor.renderx = 0;
   if (editor.cursory < editor.rowscount)
     editor.renderx = editorRowCursorxToRenderx(&editor.rows[editor.cursory], editor.cursorx);
@@ -815,9 +834,10 @@ void editorMoveCursorWordEnd()
 
 }
 
-void editorMoveCursorWordBack()
+void editorMoveCursorWordEndBack()
 {
   EditorRow *currentRow = getCurrentRow();
+  editor.isEndMode = 0;
 
   if (editor.cursorx <= 0)
     if (editorMoveCursorUp() == EXIT_SUCCESS) {
@@ -898,9 +918,6 @@ void editorHandleMoveCursorNormal (int key)
       break;
     case WORD_END:
       editorMoveCursorWordEnd();
-      break;
-    case WORD_BACK:
-      editorMoveCursorWordBack();
       break;
     case KEY_RIGHT:
       editorMoveCursorRight();
@@ -1077,13 +1094,17 @@ void editorHandleNormalMode(char keyChar) {
       if (editor.cursorx > getCurrentRow()->size - 1)
         editor.cursorx = getCurrentRow()->size-1;
       break;
+    case WORD_END:
+    if (editor.sequenceFirst == 'g') {
+      editorMoveCursorWordEndBack();
+      break;
+    }
     case KEY_RIGHT:
     case KEY_LEFT:
     case KEY_LINE_START:
     case KEY_LINE_FIRST:
     case KEY_LINE_END:
     case WORD_NEXT:
-    case WORD_END:
     case WORD_BACK:
     CASE_DOWN:
     CASE_UP:
@@ -1151,12 +1172,22 @@ void editorHandleNormalMode(char keyChar) {
     }
     editor.deleteFlag = 0;
   }
+  if (editor.backToInsertFlag)
+    editor.mode = MODE_INSERT;
 }
 // }}}
 // Insert mode {{{ 
-void editorInsertChar(int keyChar) 
+void editorHandleInsertMode(int keyChar) 
 {
   switch (keyChar) {
+    case ENTER:
+      editorNewlineAtCursorx();
+      editor.cursorx = 0;
+    break;
+    case CTRL_KEY('o'):
+      editor.backToInsertFlag = 1;
+      editor.mode = MODE_NORMAL;
+      break;
     case BACKSPACE:
       editorRowDeleteChar(getCurrentRow(), editor.cursorx-1);
       editor.cursorx--;
@@ -1195,10 +1226,12 @@ void initEditor()
   editor.rows = NULL;
   editor.filename = NULL;
   editor.isEndMode = 0;
-
   editor.commandRow.buffer = NULL;
   editor.commandRow.size = 0;
+
   editor.deleteFlag = 0;
+  editor.backToInsertFlag = 0;
+  editor.findFlag = 0;
 
   abReinit(&editor.wroteMessage);
 
@@ -1235,10 +1268,10 @@ int main(int argc, char *argv[])
             editorHandleNormalMode(ch);
             break;
           case MODE_INSERT:
-            editorInsertChar(ch);
+            editorHandleInsertMode(ch);
             break;
           case MODE_COMMAND:
-            editorCommandChar(ch);
+            editorHandleCommandMode(ch);
             if (editor.commandRow.size == 0)
               editor.mode = MODE_NORMAL;
             break;
