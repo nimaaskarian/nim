@@ -17,28 +17,6 @@
 #include <sys/ioctl.h>
 #include <sys/types.h>
 // }}}
-// Assets {{{
-size_t firstNonSpaceFromStart (const char* s, int start)
-{
-  size_t output = start;
-  while(isspace(s[output]))
-  {
-    ++output;
-  }
-  return output;
-}
-size_t reversedFirstNonSpace(const char* s, int start)
-{
-  size_t output = start;
-  while(isspace(s[output]))
-  {
-    --output;
-    if (output < 0)
-      return -1;
-  }
-  return output;
-}
-// }}}
 // Defines {{{
 #define CTRL_KEY(k) ((k) & 0x1f)
 #define NIM_VERSION "0.1.0"
@@ -119,7 +97,7 @@ struct Editor {
   int savedcursorx;
   int renderx;
   int isEndMode;
-  int deleteFlag;
+  int deleteFlag, findFlag;
   int rowoffset, coloffset;
   int screenrows, screencols;
   unsigned int rowscount;
@@ -136,6 +114,32 @@ EditorRow* getCurrentRow()
     return NULL;
   
   return &editor.rows[editor.cursory];
+}
+// }}}
+// Assets {{{
+size_t firstNonSpaceFromStart (EditorRow *row, int start)
+{
+  size_t output = start;
+  while(isspace(row->buffer[output]))
+  {
+    ++output;
+    if (output > row->size-1)
+      return -1;
+  }
+  if (row->buffer[output] == '\0') 
+    return -1;
+  return output;
+}
+size_t reversedFirstNonSpace(const char* s, int start)
+{
+  size_t output = start;
+  while(isspace(s[output]))
+  {
+    --output;
+    if (output < 0)
+      return -1;
+  }
+  return output;
 }
 // }}}
 // Range {{{
@@ -235,6 +239,14 @@ int getWindowSize(int *rows, int *cols)
 }
 // }}}
 // Row operations {{{
+size_t findFirstOfCharacter (EditorRow *row, int start, char ch)
+{
+  for (size_t output = start; output < row->size; output++) {
+    if (row->buffer[output] == ch)
+      return output;
+  }
+  return -1;
+}
 void editorFreeRow(EditorRow *row) {
   free(row->renderbuffer);
   free(row->buffer);
@@ -290,11 +302,13 @@ void editorUpdateAllRows(){
     editorUpdateRow(&editor.rows[i]);
 }
 
-void editorAppendRow(char *s, size_t len)
+void editorAppendRowAt(char *s, size_t len, int at)
 {
-  editor.rows = realloc(editor.rows, sizeof(EditorRow) * (editor.rowscount+1));
+  if (at < 0 || at > editor.rowscount) return;
 
-  int at = editor.rowscount;
+  editor.rows = realloc(editor.rows, sizeof(EditorRow) * (editor.rowscount+1));
+  memmove(&editor.rows[at + 1], &editor.rows[at], sizeof(EditorRow) * (editor.rowscount - at));
+
   editor.rows[at].size = len;
   editor.rows[at].buffer = malloc(len+1);
   memcpy(editor.rows[at].buffer, s, len);
@@ -307,6 +321,8 @@ void editorAppendRow(char *s, size_t len)
 
   editor.rowscount++;
 }
+#define editorAppendRow(string, len) editorAppendRowAt(string, len, editor.rowscount)
+
 void editorRowInsertChar(EditorRow *row, int index, int charToInsert) {
   if (index < 0 || index > row->size) index = row->size;
   row->buffer = realloc(row->buffer, row->size + 2);
@@ -321,7 +337,9 @@ void editorDeleteRow(int at)
   if (at < 0 || at > editor.rowscount - 1)
     return;
   editorFreeRow(&editor.rows[at]);
-  memmove(&editor.rows[at], &editor.rows[at+1], sizeof(EditorRow)*(editor.rowscount-at-1));
+  if (at+1 < editor.rowscount) {
+    memmove(&editor.rows[at], &editor.rows[at+1], sizeof(EditorRow)*(editor.rowscount-at-1));
+  }
   editor.rowscount--;
 }
 
@@ -765,7 +783,7 @@ int currentSequenceFirstIndex(int start) {
     if (editorCharWordType(currentRow->buffer[i]) != editorCharWordType(currentRow->buffer[i+1]))
       return i;
 
-  return firstNonSpaceFromStart(currentRow->buffer,0);
+  return firstNonSpaceFromStart(currentRow,0);
 }
 
 void editorMoveCursorWordEnd()
@@ -788,7 +806,9 @@ void editorMoveCursorWordEnd()
   int lastIndex = currentSequenceLastIndex(editor.cursorx);
 
   if (editor.cursorx == lastIndex) {
-    editor.cursorx=firstNonSpaceFromStart(currentRow->buffer, editor.cursorx+1);
+    int firstNonSpace = firstNonSpaceFromStart(currentRow, editor.cursorx+1);
+    if (firstNonSpace >= 0)
+      editor.cursorx=firstNonSpace;
     editor.cursorx=currentSequenceLastIndex(editor.cursorx);
   } else
     editor.cursorx = lastIndex;
@@ -835,7 +855,9 @@ void editorMoveCursorWordStart()
 
   char currentChar = currentRow->buffer[editor.cursorx];
   if (isspace(currentChar)) {
-    editor.cursorx = firstNonSpaceFromStart(currentRow->buffer, editor.cursorx);
+    int firstNonSpace = firstNonSpaceFromStart(currentRow, editor.cursorx+1);
+    if (firstNonSpace >= 0)
+      editor.cursorx=firstNonSpace;
     return;
   }
 
@@ -854,7 +876,9 @@ void editorMoveCursorWordStart()
   }
 
   if (editorMoveCursorDown() == EXIT_SUCCESS) {
-    editor.cursorx = firstNonSpaceFromStart(getCurrentRow()->buffer, 0);
+    int firstNonSpace = firstNonSpaceFromStart(getCurrentRow(), editor.cursorx+1);
+    if (firstNonSpace >= 0)
+      editor.cursorx=firstNonSpace;
   }
 
   while(isRowAllSpace(getCurrentRow())){
@@ -902,7 +926,9 @@ void editorHandleMoveCursorNormal (int key)
       break;
     case KEY_LINE_START:
       editor.isEndMode = 0;
-      editor.cursorx = firstNonSpaceFromStart(currentRow->buffer, 0);
+      int firstNonSpace = firstNonSpaceFromStart(currentRow, editor.cursorx+1);
+      if (firstNonSpace >= 0)
+        editor.cursorx=firstNonSpace;
       break;
     case KEY_LINE_END:
       editor.cursorx = currentRow? currentRow->size-1:0;
@@ -935,6 +961,16 @@ void editorHandleMoveCursorNormal (int key)
 }
 
 void editorHandleNormalMode(char keyChar) {
+  if (editor.findFlag) {
+    do {
+      int firstOfChar  = findFirstOfCharacter(getCurrentRow(), editor.cursorx+1, keyChar);
+      if (firstOfChar != -1)
+        editor.cursorx = firstOfChar;
+    } while (editor.numberSequenceInt-- > 0);
+    editor.findFlag = 0;
+    editor.numberSequenceInt = 0;
+    return;
+  }
   if (isdigit(keyChar)) {
     if (keyChar != '0' || editor.numberSequence.length > 0) {
       abAppend(&editor.numberSequence, &keyChar, 1);
@@ -951,9 +987,12 @@ void editorHandleNormalMode(char keyChar) {
     case 'i':
       editor.mode = MODE_INSERT;
       break;
-    case 'I':
-      editor.cursorx = firstNonSpaceFromStart(getCurrentRow()->buffer,0);
-      editor.mode = MODE_INSERT;
+    case 'I': {
+        int firstNonSpace = firstNonSpaceFromStart(getCurrentRow(), editor.cursorx+1);
+        if (firstNonSpace >= 0)
+          editor.cursorx=firstNonSpace;
+        editor.mode = MODE_INSERT;
+      }
       break;
     case 'a':
       editor.cursorx++;
@@ -968,26 +1007,39 @@ void editorHandleNormalMode(char keyChar) {
         editorRowDeleteChar(getCurrentRow(), i);
       }
       break;
+    case 'f': {
+      editor.findFlag = 1;
+      break;
+    }
     case 'J': {
       if (editor.cursory + 1 < editor.rowscount) {
-        char *nextRowBufferWithSpace;
-        EditorRow nextRow = editor.rows[editor.cursory+1];
-        int start = firstNonSpaceFromStart(nextRow.buffer, 0);
+        int start = firstNonSpaceFromStart(&editor.rows[editor.cursory+1], 0);
+        if (editor.rows[editor.cursory+1].size && start >= 0) {
+          char *nextRowBufferWithSpace;
+          nextRowBufferWithSpace = malloc(sizeof(char) * editor.rows[editor.cursory+1].size - start + 1);
+          int nextRowSize = editor.rows[editor.cursory+1].size;
+          size_t stringSize = nextRowSize - start;
+          if (firstNonSpaceFromStart(getCurrentRow(), 0) == -1)
+              memcpy(nextRowBufferWithSpace, &editor.rows[editor.cursory+1].buffer[start], nextRowSize);
+          else
+              stringSize = sprintf(nextRowBufferWithSpace, " %s", &editor.rows[editor.cursory+1].buffer[start]);
 
-        FILE *fptr;
-        fptr = fopen("log.txt", "a");
-        fprintf(fptr,"start: %d\n", start);
-        fclose(fptr);
-
-        memmove(&nextRow.buffer[start], &nextRow.buffer[0], nextRow.size-start);
-
-        size_t size = sprintf(nextRowBufferWithSpace, " %s", nextRow.buffer);
-        editorRowAppendString(getCurrentRow(), nextRowBufferWithSpace, size);
+          editorRowAppendString(getCurrentRow(), nextRowBufferWithSpace, stringSize);
+        }
         editorDeleteRow(editor.cursory+1);
-
       }
         break;
       }
+    case 'o':
+      editorAppendRowAt("", 0, ++editor.cursory);
+      editor.cursorx = 0;
+      editor.mode=MODE_INSERT;
+      break;
+    case 'O':
+      editorAppendRowAt("", 0, editor.cursory);
+      editor.cursorx = 0;
+      editor.mode=MODE_INSERT;
+      break;
     case ':':
       editor.mode = MODE_COMMAND;
       editorRowInsertChar(&editor.commandRow,editor.commandRow.size, ':');
@@ -1178,19 +1230,19 @@ int main(int argc, char *argv[])
       editor.mode = MODE_NORMAL;
     }
     else {
-      switch (editor.mode) {
-        case MODE_NORMAL:
-          editorHandleNormalMode(ch);
-          break;
-        case MODE_INSERT:
-          editorInsertChar(ch);
-          break;
-        case MODE_COMMAND:
-          editorCommandChar(ch);
-          if (editor.commandRow.size == 0)
-            editor.mode = MODE_NORMAL;
-          break;
-      }
+        switch (editor.mode) {
+          case MODE_NORMAL:
+            editorHandleNormalMode(ch);
+            break;
+          case MODE_INSERT:
+            editorInsertChar(ch);
+            break;
+          case MODE_COMMAND:
+            editorCommandChar(ch);
+            if (editor.commandRow.size == 0)
+              editor.mode = MODE_NORMAL;
+            break;
+        }
     }
   } 
   abFree(&editor.numberSequence);
