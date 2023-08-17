@@ -103,7 +103,7 @@ struct Editor {
   unsigned int rowscount;
   EditorRow* rows;
   EditorRow commandRow;
-  struct appendBuffer wroteMessage;
+  struct appendBuffer prompt;
   char *filename;
   struct termios orig_termios;
 };
@@ -450,8 +450,8 @@ void editorWrite()
   close(fd);
   
   char message[80];
-  int messageSize = sprintf(message, "\"%s\" %dL, %dB", editor.filename, editor.rowscount-1, length);
-  abAppend(&editor.wroteMessage, message, messageSize);
+  int messageSize = sprintf(message, "\"%s\" %dL, %dB", editor.filename, editor.rowscount, length);
+  abAppend(&editor.prompt, message, messageSize);
   free(buffer);
 }
 // }}}
@@ -597,8 +597,7 @@ void editorDrawRows(struct appendBuffer *ab)
     // erase in line
     abAppend(ab, "\x1b[K", 3);
 
-    // if(y < EDITOR.screenrows - 1)
-      abAppend(ab, "\r\n", 2);
+    abAppend(ab, "\r\n", 2);
   }
 }
 int editorDrawCommand(struct appendBuffer *ab) 
@@ -614,14 +613,14 @@ void editorDrawStatusBar(struct appendBuffer *ab)
   // abAppend(ab, "\x1b[7m", 4);
   int len = 0;
   if (editor.mode == MODE_COMMAND) {
-    free(editor.wroteMessage.buffer);
-    editor.wroteMessage.buffer = NULL;
-    editor.wroteMessage.length=0;
+    free(editor.prompt.buffer);
+    editor.prompt.buffer = NULL;
+    editor.prompt.length=0;
     len += editorDrawCommand(ab);
   }
-  if (editor.wroteMessage.length) {
-    abAppend(ab,editor.wroteMessage.buffer, editor.wroteMessage.length);
-    len+=editor.wroteMessage.length;
+  if (editor.prompt.length) {
+    abAppend(ab,editor.prompt.buffer, editor.prompt.length);
+    len+=editor.prompt.length;
   }
 
   while (len < editor.screencols) {
@@ -1249,7 +1248,7 @@ void initEditor()
   editor.backToInsertFlag = 0;
   editor.findFlag = 0;
 
-  abReinit(&editor.wroteMessage);
+  abReinit(&editor.prompt);
 
   abReinit(&editor.numberSequence);
 
@@ -1267,6 +1266,8 @@ int main(int argc, char *argv[])
   
   while (1) {
     editorRefreshScreen();
+    getWindowSize(&editor.screenrows, &editor.screencols);
+    editor.screenrows -= 1;
     char ch = editorReadKey();
     if (ch == ESC) {
       abReinit(&editor.numberSequence);
