@@ -29,14 +29,14 @@ enum EditorKey {
   KEY_LINE_START = '^',
   KEY_LINE_FIRST = '0',
   KEY_LINE_END = '$',
-  WORD_NEXT = 'w',
-  WORD_END = 'e',
-  WORD_BACK = 'b',
-  BOTTOM = 'G',
-  ESC = 27,
-  BACKSPACE = 127,
-  ENTER = 13,
-  TOP = 1000,
+  KEY_WORD_NEXT = 'w',
+  KEY_WORD_END = 'e',
+  KEY_WORD_BACK = 'b',
+  KEY_BOTTOM = 'G',
+  KEY_ESC = 27,
+  KEY_BACKSPACE = 127,
+  KEY_ENTER = 13,
+  KEY_TOP = 1000,
 };
 #define CASE_DOWN case KEY_DOWN: case '+'
 #define CASE_UP case KEY_UP: case '-'
@@ -484,7 +484,7 @@ void editorExecuteCommandRow()
 }
 void editorHandleCommandMode (int keyChar)
 {
-  if (keyChar == ENTER) {
+  if (keyChar == KEY_ENTER) {
     editorExecuteCommandRow();
     free(editor.commandRow.buffer);
     editor.commandRow.buffer = NULL;
@@ -492,7 +492,7 @@ void editorHandleCommandMode (int keyChar)
     editor.mode = MODE_NORMAL;
     return;
   }
-  if (keyChar == BACKSPACE) {
+  if (keyChar == KEY_BACKSPACE) {
     editorRowDeleteChar(&editor.commandRow, editor.commandRow.size-1);
     return;
   }
@@ -877,7 +877,7 @@ void editorMoveCursorWordStartBack()
   while (editor.cursorx > 0) {
     if (editorCharWordType(getCurrentRow()->buffer[editor.cursorx]) != editorCharWordType(getCurrentRow()->buffer[editor.cursorx-1]))
       break;
-    editor.cursorx--;
+    editorSetCursorx(editor.cursorx-1);
   }
 }
 
@@ -925,13 +925,13 @@ void editorHandleMoveCursorNormal (int key)
   EditorRow *currentRow = getCurrentRow();
 
   switch (key) {
-    case WORD_NEXT:
+    case KEY_WORD_NEXT:
       editorMoveCursorWordStart();
       break;
-    case WORD_BACK:
+    case KEY_WORD_BACK:
       editorMoveCursorWordStartBack();
       break;
-    case WORD_END:
+    case KEY_WORD_END:
       editorMoveCursorWordEnd();
       break;
     case KEY_RIGHT:
@@ -946,24 +946,24 @@ void editorHandleMoveCursorNormal (int key)
     CASE_UP:
       editorMoveCursorUp();
       break;
-    case BOTTOM:
+    case KEY_BOTTOM:
       editor.cursory = editor.rowscount - 1;
       break;
-    case TOP:
+    case KEY_TOP:
       editor.cursory = 0;
       break;
     case KEY_LINE_FIRST:
       editor.isEndMode = 0;
-      editor.cursorx = 0;
+      editorSetCursorx(0);
       break;
     case KEY_LINE_START:
       editor.isEndMode = 0;
       int firstNonSpace = firstNonSpaceFromStart(currentRow, editor.cursorx+1);
       if (firstNonSpace >= 0)
-        editor.cursorx=firstNonSpace;
+        editorSetCursorx(firstNonSpace);
       break;
     case KEY_LINE_END:
-      editor.cursorx = currentRow? currentRow->size-1:0;
+      editorSetCursorx(currentRow->size-1);
       editor.isEndMode = 1;
       break;
   }
@@ -1015,12 +1015,13 @@ void editorHandleNormalMode(char keyChar) {
     }
   }
 
+  char sequenceFirstBefore = editor.sequenceFirst;
   switch (keyChar) {
     case 'i':
       editor.mode = MODE_INSERT;
       break;
     case 'I': {
-        int firstNonSpace = firstNonSpaceFromStart(getCurrentRow(), editor.cursorx+1);
+        int firstNonSpace = firstNonSpaceFromStart(getCurrentRow(), 0);
         if (firstNonSpace >= 0)
           editor.cursorx=firstNonSpace;
         editor.mode = MODE_INSERT;
@@ -1043,6 +1044,13 @@ void editorHandleNormalMode(char keyChar) {
       editor.findFlag = 1;
       break;
     }
+    case 'y':
+      if (editor.sequenceFirst == 'y') {
+      }
+      else
+        editor.sequenceFirst = 'y';
+      break;
+
     case 'J': {
       if (editor.cursory + 1 < editor.rowscount) {
         int start = firstNonSpaceFromStart(&editor.rows[editor.cursory+1], 0);
@@ -1076,6 +1084,17 @@ void editorHandleNormalMode(char keyChar) {
       editor.mode = MODE_COMMAND;
       editorRowInsertChar(&editor.commandRow,editor.commandRow.size, ':');
       break;
+    case 'c':
+      if (editor.sequenceFirst == 'c') {
+        for (int i = getCurrentRow()->size-1; i >= 0; i--) {
+          editorRowDeleteChar(getCurrentRow(), i);
+        }
+        editor.mode = MODE_INSERT;
+      } else {
+        editor.sequenceFirst = 'c';
+      }
+    break;
+      
     case 'd':
       editor.deleteFlag = 1;
       editor.beforeDeletex = editor.cursorx;
@@ -1087,7 +1106,6 @@ void editorHandleNormalMode(char keyChar) {
           editor.cursory = editor.rowscount-1;
       } else {
         editor.sequenceFirst = 'd';
-        return;
       }
       break;
     case 'g':
@@ -1095,11 +1113,10 @@ void editorHandleNormalMode(char keyChar) {
         if (editor.numberSequenceInt)
           editorMoveCursoryToLine(&editor.numberSequenceInt);
         else
-          editorHandleMoveCursorNormal(TOP);
+          editorHandleMoveCursorNormal(KEY_TOP);
       }
       else {
         editor.sequenceFirst = 'g';
-        return;
       }
       break;
     case 'x':
@@ -1109,7 +1126,7 @@ void editorHandleNormalMode(char keyChar) {
       if (editor.cursorx > getCurrentRow()->size - 1)
         editor.cursorx = getCurrentRow()->size-1;
       break;
-    case WORD_END:
+    case KEY_WORD_END:
     if (editor.sequenceFirst == 'g') {
       editorMoveCursorWordEndBack();
       break;
@@ -1119,8 +1136,8 @@ void editorHandleNormalMode(char keyChar) {
     case KEY_LINE_START:
     case KEY_LINE_FIRST:
     case KEY_LINE_END:
-    case WORD_NEXT:
-    case WORD_BACK:
+    case KEY_WORD_NEXT:
+    case KEY_WORD_BACK:
     CASE_DOWN:
     CASE_UP:
       if (editor.numberSequenceInt <= 0)
@@ -1132,7 +1149,7 @@ void editorHandleNormalMode(char keyChar) {
         }
       }
       break;
-    case BOTTOM:
+    case KEY_BOTTOM:
       if (editor.numberSequenceInt) 
         editorMoveCursoryToLine(&editor.numberSequenceInt);
       else
@@ -1149,7 +1166,8 @@ void editorHandleNormalMode(char keyChar) {
         editor.cursory = 0;
       break;
   }
-  editor.sequenceFirst = '\0';
+  if (editor.sequenceFirst == sequenceFirstBefore)
+    editor.sequenceFirst = '\0';
 
   if (editor.deleteFlag) {
     int starty = editor.cursory;
@@ -1164,7 +1182,7 @@ void editorHandleNormalMode(char keyChar) {
     int endx = editor.beforeDeletex;
 
     if (startx > endx) {
-      startx=editor.beforeDeletex;
+      startx = editor.beforeDeletex;
       endx = editor.cursorx;
     }
     if (starty != endy) {
@@ -1179,10 +1197,10 @@ void editorHandleNormalMode(char keyChar) {
       // editorRemoveRow(start);
     } else if (startx != endx) {
 
-      for (int i=startx; i < endx; i++) {
-        editorRowDeleteChar(getCurrentRow(), startx);
-        editor.cursorx--;
+      for (int i=endx; i >= startx; i++) {
+        editorRowDeleteChar(getCurrentRow(), i);
       }
+      editor.cursorx = startx;
       editorUpdateRow(getCurrentRow());
     }
     editor.deleteFlag = 0;
@@ -1195,7 +1213,7 @@ void editorHandleNormalMode(char keyChar) {
 void editorHandleInsertMode(int keyChar) 
 {
   switch (keyChar) {
-    case ENTER:
+    case KEY_ENTER:
       editorNewlineAtCursorx();
       editor.cursorx = 0;
     break;
@@ -1203,7 +1221,7 @@ void editorHandleInsertMode(int keyChar)
       editor.backToInsertFlag = 1;
       editor.mode = MODE_NORMAL;
       break;
-    case BACKSPACE:
+    case KEY_BACKSPACE:
       editorRowDeleteChar(getCurrentRow(), editor.cursorx-1);
       editor.cursorx--;
       break;
@@ -1229,8 +1247,8 @@ void initEditor()
 {
   editor.cursorx = 0;
   editor.cursory = 0;
-  editor.beforeDeletex = 0;
-  editor.beforeDeletey= 0;
+  // editor.beforeDeletex = 0;
+  // editor.beforeDeletey= 0;
 
   editor.savedcursorx = 0;
   editor.rowscount = 0;
@@ -1269,7 +1287,7 @@ int main(int argc, char *argv[])
     getWindowSize(&editor.screenrows, &editor.screencols);
     editor.screenrows -= 1;
     char ch = editorReadKey();
-    if (ch == ESC) {
+    if (ch == KEY_ESC) {
       abReinit(&editor.numberSequence);
 
       editor.commandRow.buffer = NULL;
